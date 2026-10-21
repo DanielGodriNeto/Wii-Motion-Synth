@@ -15,6 +15,9 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Fix git ownership issue
+        run: git config --global --add safe.directory '*'
+
       - name: Compile Project
         run: make
 
