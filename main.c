@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <malloc.h>
 
 #define SAMPLERATE 48000
 #define SAMPLES_PER_BUFFER 1024
@@ -12,7 +13,6 @@
 #define SINE_LUT_MASK (SINE_LUT_SIZE - 1)
 #define PI 3.14159265358979323846f
 
-// Waveform definitions
 typedef enum { WAVE_SINE, WAVE_SQUARE, WAVE_SAWTOOTH } WaveType;
 static volatile WaveType g_current_wave = WAVE_SINE;
 
@@ -23,6 +23,17 @@ static u32 phase_accumulator = 0;
 
 static volatile u32 g_phase_step = 0;
 static volatile u32 g_vol_scale = 204; 
+
+int map_pitch_to_freq(float pitch) {
+    return 100 + ((pitch + 90.0f) / 180.0f) * 900;
+}
+
+int map_roll_to_vol(float roll) {
+    int vol = 255 - (abs((int)roll) * 255 / 180);
+    if(vol < 0) vol = 0;
+    if(vol > 255) vol = 255;
+    return vol;
+}
 
 void init_sine_table(void) {
     for (int i = 0; i < SINE_LUT_SIZE; i++) {
@@ -59,10 +70,40 @@ void audio_callback(int voice) {
     current_buffer ^= 1;
 }
 
-int main(int argc, char **argv) {
-    void *fb = NULL;
-    GXRModeObj *rmode = NULL;
+const int SCALE_FREQS[] = {
+    131, 147, 165, 196, 220, 262, 294, 330, 392, 440, 523, 587, 659, 784, 880, 1047
+};
+#define NUM_NOTES (sizeof(SCALE_FREQS)/sizeof(SCALE_FREQS[0]))
 
+int quantize_frequency(int raw_freq) {
+    int closest_freq = SCALE_FREQS[0];
+    int min_diff = 9999;
+    for(int i = 0; i < NUM_NOTES; i++) {
+        int diff = abs(raw_freq - SCALE_FREQS[i]);
+        if(diff < min_diff) {
+            min_diff = diff;
+            closest_freq = SCALE_FREQS[i];
+        }
+    }
+    return closest_freq;
+}
+
+// --- FEATURE: VISUAL OSCILLOSCOPE (ZOOMED IN) ---
+void draw_oscilloscope(short* audio_buffer, u32 buffer_size) {
+    // Zoom in by drawing only 1/4th of the buffer
+    u32 display_samples = buffer_size / 4; 
+    
+    GX_Begin(GX_LINESTRIP, GX_VTXFMT0, display_samples);
+    for(u32 i = 0; i < display_samples; i++) {
+        float x = (float)i / (float)display_samples * 640.0f;
+        float y = 240.0f - ((float)audio_buffer[i] / 32768.0f * 150.0f); 
+        GX_Position3f32(x, y, 0.0f);
+        GX_Color4u8(0, 255, 255, 255); // Cyan waveform
+    }
+    GX_End();
+}
+
+int main(int argc, char **argv) {
     init_sine_table();
     memset(audio_buffers, 0, sizeof(audio_buffers));
     DCFlushRange(audio_buffers, sizeof(audio_buffers));
@@ -71,16 +112,52 @@ int main(int argc, char **argv) {
     g_vol_scale = (u32)(0.8f * 256.0f);
 
     VIDEO_Init();
-    rmode = VIDEO_GetPreferredMode(NULL);
-    fb = MEM_K0_TO_K1(SYS_GetArena1Lo());
-    SYS_SetArena1Lo(SYS_GetArena1Lo() + VIDEO_GetFrameBufferSize(rmode));
-
-    console_init(fb, 20, 20, rmode->fbWidth, rmode->xfbHeight, rmode->fbWidth * VI_DISPLAY_PIX_SZ);
+    GXRModeObj *rmode = VIDEO_GetPreferredMode(NULL);
+    void *frameBuffer = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
     VIDEO_Configure(rmode);
-    VIDEO_SetNextFramebuffer(fb);
-    VIDEO_SetBlack(false);
+    VIDEO_SetNextFramebuffer(frameBuffer);
+    VIDEO_SetBlack(FALSE);
     VIDEO_Flush();
     VIDEO_WaitVSync();
+    if(rmode->viTVMode & VI_NON_INTERLACE) VIDEO_WaitVSync();
+
+    // Initialize the text console directly over the framebuffer
+    console_init(frameBuffer, 0, 0, rmode->fbWidth, rmode->xfbHeight, rmode->fbWidth * VI_DISPLAY_PIX_SZ);
+
+    void *gp_fifo = memalign(32, 256 * 1024);
+    memset(gp_fifo, 0, 256 * 1024);
+    GX_Init(gp_fifo, 256 * 1024);
+
+    GXColor background = {0, 0, 0, 255}; // Explicitly define Black
+    GX_SetCopyClear(background, 0x00ffffff);
+    GX_SetViewport(0, 0, rmode->fbWidth, rmode->efbHeight, 0, 1);
+    GX_SetDispCopyYScale((f32)rmode->xfbHeight / (f32)rmode->efbHeight);
+    GX_SetScissor(0, 0, rmode->fbWidth, rmode->efbHeight);
+    GX_SetDispCopySrc(0, 0, rmode->fbWidth, rmode->efbHeight);
+    GX_SetDispCopyDst(rmode->fbWidth, rmode->xfbHeight);
+    GX_SetCopyFilter(rmode->aa, rmode->sample_pattern, GX_TRUE, rmode->vfilter);
+    GX_SetFieldMode(rmode->field_rendering, ((rmode->viHeight==2*rmode->xfbHeight)?GX_TRUE:GX_FALSE));
+    GX_SetPixelFmt(GX_PF_RGB8_Z24, GX_ZC_LINEAR);
+    GX_SetCullMode(GX_CULL_NONE);
+    GX_SetDispCopyGamma(GX_GM_1_0);
+
+    Mtx44 ortho;
+    guOrtho(ortho, 0, 480, 0, 640, 0, 300);
+    GX_LoadProjectionMtx(ortho, GX_ORTHOGRAPHIC);
+
+    GX_ClearVtxDesc();
+    GX_SetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GX_SetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+    GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+
+    GX_SetNumChans(1);
+    // Initialize the color channel to pull directly from the vertex
+    GX_SetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_VTX, GX_SRC_VTX, GX_LIGHTNULL, GX_DF_NONE, GX_AF_NONE);
+    
+    GX_SetNumTexGens(0);
+    GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GX_SetTevOp(GX_TEVSTAGE0, GX_PASSCLR);  
 
     WPAD_Init();
     WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS_ACC);
@@ -89,50 +166,120 @@ int main(int argc, char **argv) {
     ASND_Pause(0);
     ASND_SetVoice(0, VOICE_MONO_16BIT, SAMPLERATE, 0, audio_buffers[0], SAMPLES_PER_BUFFER * sizeof(s16), 255, 255, audio_callback);
 
-    float current_freq = 440.0f;
-    float current_amp = 0.8f;
-    const char* wave_names[] = {"Sine", "Square", "Sawtooth"};
+    bool speaker_enabled = false;
+    bool show_oscilloscope = true; 
+    bool show_welcome = true; // New Welcome Screen State
+    int lfo_phase = 0;
 
-    while (1) {
+    // Clear the console text before starting
+    printf("\x1b[2J"); 
+
+    while(1) {
         WPAD_ScanPads();
-        WPADData *wiimote = WPAD_Data(0);
         u32 pressed = WPAD_ButtonsDown(0);
-
-        if (wiimote != NULL && wiimote->err == WPAD_ERR_NONE) {
-            float pitch = wiimote->orient.pitch;
-            float roll = wiimote->orient.roll;
-
-            if (pitch < -90.0f) pitch = -90.0f;
-            if (pitch > 90.0f) pitch = 90.0f;
-            current_freq = 100.0f + (1000.0f - 100.0f) * (pitch - (-90.0f)) / 180.0f;
-
-            if (roll < -90.0f) roll = -90.0f;
-            if (roll > 90.0f) roll = 90.0f;
-            current_amp = 0.2f + (1.0f - 0.2f) * (roll - (-90.0f)) / 180.0f;
-            
-            // Switch waveforms
-            if (pressed & WPAD_BUTTON_A) g_current_wave = WAVE_SINE;
-            if (pressed & WPAD_BUTTON_B) g_current_wave = WAVE_SQUARE;
-            if (pressed & WPAD_BUTTON_1) g_current_wave = WAVE_SAWTOOTH;
-        }
-
-        g_phase_step = (u32)(((current_freq * SINE_LUT_SIZE) / SAMPLERATE) * 65536.0f);
-        g_vol_scale = (u32)(current_amp * 256.0f);
+        u32 held = WPAD_ButtonsHeld(0);
+        WPADData *data = WPAD_Data(0);
 
         if (pressed & WPAD_BUTTON_HOME) break;
 
-        printf("\x1b[H"); // Move cursor to top-left instead of clearing the whole screen to prevent flickering
-        printf("=== Wii Motion Synth ===\n\n");
-        printf("Waveform:  %-10s \n", wave_names[g_current_wave]);
-        printf("Frequency: %-7.2f Hz  \n", current_freq);
-        printf("Amplitude: %-7.2f    \n\n", current_amp);
-        printf("Controls:\n");
-        printf(" Tilt Up/Down: Pitch (Freq)\n");
-        printf(" Tilt L/R:     Roll  (Vol)\n");
-        printf(" A Button:     Sine Wave\n");
-        printf(" B Button:     Square Wave\n");
-        printf(" 1 Button:     Saw Wave\n\n");
-        printf("Press HOME to exit.       \n");
+        // --- WELCOME SCREEN LOGIC ---
+        if (show_welcome) {
+            if (pressed & WPAD_BUTTON_A) {
+                show_welcome = false; // Exit welcome screen
+                printf("\x1b[2J");    // Clear the text
+            } else {
+                printf("\x1b[4;1H"); 
+                printf("             ========================================\n");
+                printf("                       WII MOTION SYNTH              \n");
+                printf("             ========================================\n\n");
+                printf("      Turn your Wiimote into an interactive audio synthesizer.\n\n");
+                printf("      [ HOW TO PLAY ]\n");
+                printf("      - Tilt Up/Down (Pitch) to change the Frequency (Note).\n");
+                printf("      - Twist Left/Right (Roll) to change the Volume.\n\n");
+                printf("      [ CONTROLS ]\n");
+                printf("      Hold B  : Snap-to-Scale\n");
+                printf("      Hold A  : Square Wave\n");
+                printf("      Hold 1  : Sawtooth Wave\n");
+                printf("      PLUS    : Toggle Wiimote Speaker\n");
+                printf("      MINUS   : Toggle Oscilloscope / Stats UI\n");
+                printf("      Nunchuk : Joystick controls LFO (Vibrato & Tremolo)\n\n\n");
+                printf("                    >> PRESS 'A' TO START <<\n");
+
+                g_vol_scale = 0; // Keep the synth completely silent 
+                VIDEO_WaitVSync();
+                continue; // Skip the rest of the audio/render loop
+            }
+        }
+
+        // --- MAIN APP LOGIC ---
+        
+        // Display Toggle
+        if (pressed & WPAD_BUTTON_MINUS) {
+            show_oscilloscope = !show_oscilloscope;
+            if (!show_oscilloscope) {
+                printf("\x1b[2J"); // Clear the console text when switching to UI mode
+            }
+        }
+
+        // Waveforms
+        if (held & WPAD_BUTTON_1) g_current_wave = WAVE_SAWTOOTH;
+        else if (held & WPAD_BUTTON_A) g_current_wave = WAVE_SQUARE;
+        else g_current_wave = WAVE_SINE;
+
+        // Speaker
+        if (pressed & WPAD_BUTTON_PLUS) {
+            speaker_enabled = !speaker_enabled;
+            WPAD_ControlSpeaker(0, speaker_enabled ? 1 : 0);
+            if(speaker_enabled) WPAD_Rumble(0, 0); 
+        }
+
+        // Raw, unsmoothed accelerometer data
+        int target_freq = map_pitch_to_freq(data->orient.pitch);
+        int target_vol = map_roll_to_vol(data->orient.roll);
+
+        if (held & WPAD_BUTTON_B) {
+            target_freq = quantize_frequency(target_freq);
+        }
+
+        // Nunchuk LFO
+        if (data->exp.type == WPAD_EXP_NUNCHUK) {
+            int joy_y = (int)data->exp.nunchuk.js.pos.y - (int)data->exp.nunchuk.js.center.y;
+            int joy_x = (int)data->exp.nunchuk.js.pos.x - (int)data->exp.nunchuk.js.center.x;
+            
+            if (abs(joy_y) > 10) target_freq += (sine_table[lfo_phase] * joy_y) / 60000; 
+            if (abs(joy_x) > 10) target_vol -= abs((sine_table[lfo_phase] * joy_x) / 60000);
+            
+            lfo_phase = (lfo_phase + 5) % SINE_LUT_SIZE; 
+        }
+
+        g_phase_step = (u32)(((float)target_freq * SINE_LUT_SIZE / SAMPLERATE) * 65536.0f);
+        g_vol_scale = target_vol;
+
+        // --- RENDER LOGIC ---
+        if (show_oscilloscope) {
+            // Draw hardware graphics
+            draw_oscilloscope(audio_buffers[current_buffer ^ 1], SAMPLES_PER_BUFFER);
+            GX_DrawDone();
+            GX_CopyDisp(frameBuffer, GX_TRUE);
+        } else {
+            // Draw CPU Text UI
+            printf("\x1b[1;1H"); 
+            printf("--- WII MOTION SYNTH ---\n\n");
+            printf("Current Wave: %-8s\n", g_current_wave == WAVE_SINE ? "SINE" : (g_current_wave == WAVE_SQUARE ? "SQUARE" : "SAWTOOTH"));
+            printf("Frequency: %4d Hz     \n", target_freq);
+            printf("Volume: %3d%%          \n", (target_vol * 100) / 255);
+            printf("Speaker: %s           \n\n", speaker_enabled ? "ON " : "OFF");
+            
+            printf("--- CONTROLS ---\n");
+            printf("Pitch (Tilt Up/Down): Frequency\n");
+            printf("Roll  (Twist L/R): Volume\n");
+            printf("Hold B: Snap-to-Scale\n");
+            printf("Hold A: Square Wave\n");
+            printf("Hold 1: Sawtooth Wave\n");
+            printf("Press PLUS: Toggle Speaker\n");
+            printf("Press MINUS: Toggle Visualizer\n");
+            printf("Press HOME: Exit\n");
+        }
 
         VIDEO_WaitVSync();
     }

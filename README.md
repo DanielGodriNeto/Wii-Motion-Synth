@@ -1,25 +1,27 @@
 # Wii Motion Synth
 
-A standalone Nintendo Wii homebrew application written in C that turns the Wiimote into a motion-controlled audio synthesizer. It leverages `libogc`, `libwiiuse`, and `libasnd` to map real-time accelerometer data (Pitch and Roll) to audio frequency and amplitude.
+A standalone Nintendo Wii homebrew application written in C that turns the Wiimote into a motion-controlled audio synthesizer. It leverages `libogc`, `libwiiuse`, and `libasnd` to map real-time accelerometer data to audio frequency and amplitude.
 
 ## Features
 * **Real-time Synthesis:** Double-buffered, integer-math audio processing using Direct Memory Access (DMA) for zero latency and FPU safety.
+* **Dual UI Modes:** Switch seamlessly between a real-time hardware-accelerated (GX) oscilloscope and a detailed CPU text statistics overlay.
 * **Motion Controls:**
-  * **Pitch:** Controls oscillator frequency (100Hz to 1000Hz).
+  * **Pitch:** Controls oscillator frequency.
   * **Roll:** Controls amplitude/volume.
-* **Waveforms:** Toggle between Sine (A), Square (B), and Sawtooth (1) waves dynamically.
+  * **Nunchuk LFO:** Analog stick controls vibrato and tremolo.
+* **Waveforms & Modifiers:** Toggle between Sine, Square (Hold A), and Sawtooth (Hold 1) waves. Hold B to snap frequencies to a C Major Pentatonic scale.
+* **Wiimote Speaker:** Stream synth audio directly through the controller.
+
+## Installation (Real Hardware)
+1. Format an SD card to FAT32.
+2. Download the pre-compiled `WiiMotionSynth-latest.zip` from the [Releases page](https://github.com/CGdiego/WiiMotionSynth/releases).
+3. Extract the `.zip` file directly to the root of your SD card.
+4. Launch via the Homebrew Channel.
 
 ## Building from Source
 Prerequisites: [devkitPro](https://devkitpro.org/) with the `wii-dev` package installed.
 
 1. Clone the repository: `git clone https://github.com/CGdiego/WiiMotionSynth.git`
 2. Navigate to the directory: `cd WiiMotionSynth`
-3. Compile the `.dol` file: `make`
+3. Compile the project: `make`
 4. The compiled executable will be located at `build/WiiMotionSynth.dol`.
-
-## Installation (Real Hardware)
-1. Format an SD card to FAT32.
-2. Create the directory path: `SD:/apps/WiiMotionSynth/`.
-3. Copy `build/WiiMotionSynth.dol` to that folder and rename it to `boot.dol`.
-4. Copy `meta.xml` and `icon.png` into the same folder.
-5. Launch via the Homebrew Channel.
