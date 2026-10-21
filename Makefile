@@ -6,14 +6,20 @@ APP_NAME    := WiiMotionSynth
 BUILD_DIR   := build
 SRCS        := main.c
 
-DEVKITPRO   := C:/devkitPro
-DEVKITPPC   := C:/devkitPro/devkitPPC
+# Rely on environment variables set by devkitPro instead of hardcoded Windows paths
+ifeq ($(strip $(DEVKITPRO)),)
+  $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>devkitPro")
+endif
+
+ifeq ($(strip $(DEVKITPPC)),)
+  $(error "Please set DEVKITPPC in your environment. export DEVKITPPC=<path to>devkitPPC")
+endif
 
 PREFIX      := $(DEVKITPPC)/bin/powerpc-eabi-
 CC          := $(PREFIX)gcc
 
-# Caminho do executavel elf2dol
-ELF2DOL     := C:/devkitPro/tools/bin/elf2dol.exe
+# Path to the elf2dol executable using environment variables
+ELF2DOL     := $(DEVKITPRO)/tools/bin/elf2dol
 
 INCLUDES    := -I$(DEVKITPRO)/libogc/include \
                -I$(DEVKITPRO)/libogc/include/wiiuse
@@ -22,7 +28,7 @@ LIBPATHS    := -L$(DEVKITPRO)/libogc/lib/wii \
                -L$(DEVKITPPC)/powerpc-eabi/lib
 
 CFLAGS      := -DGEKKO -DHW_RVL -mrvl -mcpu=750 -meabi -mhard-float -O2 -Wall $(INCLUDES)
-# Inclusao das bibliotecas do Wiimote (wiiuse) e Bluetooth (bte)
+# Included Wiimote (wiiuse) and Bluetooth (bte) libraries
 LIBS        := -lwiiuse -lbte -lasnd -lfat -logc -lm
 LDFLAGS     := $(LIBPATHS) -mrvl -Wl,-gc-sections $(LIBS)
 
@@ -32,13 +38,13 @@ $(BUILD_DIR):
 	@mkdir -p $@
 
 $(BUILD_DIR)/$(APP_NAME).elf: $(SRCS) | $(BUILD_DIR)
-	@echo "Compilando $(APP_NAME).elf..."
+	@echo "Compiling $(APP_NAME).elf..."
 	$(CC) $(CFLAGS) $(SRCS) -o $@ $(LDFLAGS)
 
 $(BUILD_DIR)/$(APP_NAME).dol: $(BUILD_DIR)/$(APP_NAME).elf
-	@echo "Convertendo para executavel Wii (.dol)..."
+	@echo "Converting to Wii executable (.dol)..."
 	$(ELF2DOL) $< $@
-	@echo "Sucesso! Arquivo gerado em $@"
+	@echo "Success! File generated at $@"
 
 clean:
 	@rm -rf $(BUILD_DIR)
