@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+    <name>Wii Motion Synth</name>
+    <coder>CGdiego</coder>
+    <version>1.0.0</version>
+    <release_date>20261021000000</release_date>
+    <short_description>Motion-controlled Audio Synthesizer</short_description>
+    <long_description>A standalone Nintendo Wii homebrew application that turns your Wiimote into an interactive audio synthesizer. 
+    
+Controls:
+- Pitch (Forward/Back): Adjusts Frequency (100Hz - 1000Hz)
+- Roll (Left/Right): Adjusts Amplitude/Volume
+- A Button: Sine Wave
+- B Button: Square Wave
+- 1 Button: Sawtooth Wave
+- HOME: Exit to Loader
+    </long_description>
+</app>

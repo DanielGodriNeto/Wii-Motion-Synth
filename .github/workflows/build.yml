@@ -1,0 +1,45 @@
+name: Build and Release Wii App
+
+on:
+  push:
+    tags:
+      - "v*.*.*" # Triggers only when you push a tag like v1.0.0
+
+permissions:
+  contents: write # Required to create a GitHub Release
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitppc:latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Compile Project
+        run: make
+
+      - name: Install Zip Utility
+        run: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y zip
+
+      - name: Package Homebrew Zip
+        run: |
+          # Create the folder structure expected by the Wii SD Card
+          mkdir -p apps/WiiMotionSynth
+          
+          # Copy and rename the executable
+          cp build/WiiMotionSynth.dol apps/WiiMotionSynth/boot.dol
+          
+          # Copy the Homebrew Channel assets
+          cp meta.xml apps/WiiMotionSynth/
+          cp icon.png apps/WiiMotionSynth/
+          
+          # Zip the folder for distribution
+          zip -r WiiMotionSynth-Release.zip apps/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: WiiMotionSynth-Release.zip
+          generate_release_notes: true

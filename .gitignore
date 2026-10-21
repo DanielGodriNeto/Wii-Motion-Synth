@@ -1,0 +1,9 @@
+# devkitPro Build Artifacts
+build/
+*.dol
+*.elf
+*.o
+*.d
+
+# VS Code
+.vscode/
