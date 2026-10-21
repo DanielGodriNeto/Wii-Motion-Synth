@@ -18,8 +18,8 @@ Prerequisites: [devkitPro](https://devkitpro.org/) with the `wii-dev` package in
 4. The compiled executable will be located at `build/WiiMotionSynth.dol`.
 
 ## Installation (Real Hardware)
+
 1. Format an SD card to FAT32.
-2. Create the directory path: `SD:/apps/WiiMotionSynth/`.
-3. Copy `build/WiiMotionSynth.dol` to that folder and rename it to `boot.dol`.
-4. Copy `meta.xml` and `icon.png` into the same folder.
-5. Launch via the Homebrew Channel.
+2. Download the pre-compiled `WiiMotionSynth-latest.zip` from the [Releases page](https://github.com/CGdiego/Wii-Motion-Synth/releases).
+3. Extract the `.zip` file directly to the root of your SD card.
+4. Insert the SD card into your Wii and launch **Wii Motion Synth** via the Homebrew Channel.
