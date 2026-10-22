@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
+#include <time.h>
 
 #define SAMPLERATE 48000
 #define SAMPLES_PER_BUFFER 1024
@@ -13,7 +14,7 @@
 #define SINE_LUT_MASK (SINE_LUT_SIZE - 1)
 #define PI 3.14159265358979323846f
 
-typedef enum { WAVE_SINE, WAVE_SQUARE, WAVE_SAWTOOTH } WaveType;
+typedef enum { WAVE_SINE, WAVE_SQUARE, WAVE_SAWTOOTH, WAVE_TRIANGLE, WAVE_NOISE, WAVE_PULSE, WAVE_PULSE_NARROW } WaveType;
 static volatile WaveType g_current_wave = WAVE_SINE;
 
 static s16 sine_table[SINE_LUT_SIZE] ATTRIBUTE_ALIGN(32);
@@ -59,7 +60,20 @@ void audio_callback(int voice) {
             sample = (lut_index < (SINE_LUT_SIZE / 2)) ? (vol * 127) : -(vol * 127);
         } else if (wave == WAVE_SAWTOOTH) {
             sample = (((s32)lut_index - (SINE_LUT_SIZE / 2)) * (s32)vol * 255) / SINE_LUT_SIZE;
-        }
+        } else if (wave == WAVE_TRIANGLE) {
+            s32 half_size = SINE_LUT_SIZE / 2;
+            s32 pos = lut_index % half_size;
+            s32 val = (pos * (s32)vol * 255) / half_size;
+            sample = (lut_index < half_size) ? (val - (vol * 127)) : ((vol * 127) - val);
+        } else if (wave == WAVE_NOISE) {
+            sample = ((rand() % 256) - 128) * vol;
+        } else if (wave == WAVE_PULSE) {
+            // Pulse wave with 25% duty cycle (SINE_LUT_SIZE / 4)
+            sample = (lut_index < (SINE_LUT_SIZE / 4)) ? (vol * 127) : -(vol * 127);
+        } else if (wave == WAVE_PULSE_NARROW) {
+            // 12.5% duty cycle (SINE_LUT_SIZE / 8)
+            sample = (lut_index < (SINE_LUT_SIZE / 8)) ? (vol * 127) : -(vol * 127);
+        }       
 
         buf[i] = (s16)sample;
         phase_accumulator += step;
@@ -104,6 +118,8 @@ void draw_oscilloscope(short* audio_buffer, u32 buffer_size) {
 }
 
 int main(int argc, char **argv) {
+    srand(time(NULL));
+
     init_sine_table();
     memset(audio_buffers, 0, sizeof(audio_buffers));
     DCFlushRange(audio_buffers, sizeof(audio_buffers));
@@ -166,7 +182,6 @@ int main(int argc, char **argv) {
     ASND_Pause(0);
     ASND_SetVoice(0, VOICE_MONO_16BIT, SAMPLERATE, 0, audio_buffers[0], SAMPLES_PER_BUFFER * sizeof(s16), 255, 255, audio_callback);
 
-    bool speaker_enabled = false;
     bool show_oscilloscope = true; 
     bool show_welcome = true; // New Welcome Screen State
     int lfo_phase = 0;
@@ -197,12 +212,17 @@ int main(int argc, char **argv) {
                 printf("      - Tilt Up/Down (Pitch) to change the Frequency (Note).\n");
                 printf("      - Twist Left/Right (Roll) to change the Volume.\n\n");
                 printf("      [ CONTROLS ]\n");
-                printf("      Hold B  : Snap-to-Scale\n");
-                printf("      Hold A  : Square Wave\n");
-                printf("      Hold 1  : Sawtooth Wave\n");
-                printf("      PLUS    : Toggle Wiimote Speaker\n");
-                printf("      MINUS   : Toggle Oscilloscope / Stats UI\n");
-                printf("      Nunchuk : Joystick controls LFO (Vibrato & Tremolo)\n\n\n");
+                printf("      Hold B    : Snap-to-Scale\n");
+                printf("      Hold A    : Square Wave\n");
+                printf("      Hold 1    : Sawtooth Wave\n");
+                printf("      Hold 2    : Octave Shift\n");
+                printf("      D-Pad UP  : Triangle Wave\n");
+                printf("      D-Pad DWN : White Noise\n");
+                printf("      D-Pad LFT : Pulse Wave\n");
+                printf("      D-Pad RGT : Narrow Pulse\n");
+                printf("      Hold PLUS : Mute Gate\n");
+                printf("      MINUS     : Toggle Oscilloscope / Stats UI\n");
+                printf("      Nunchuk   : Joystick LFO (Vibrato & Tremolo)\n\n\n");
                 printf("                    >> PRESS 'A' TO START <<\n");
 
                 g_vol_scale = 0; // Keep the synth completely silent 
@@ -222,16 +242,13 @@ int main(int argc, char **argv) {
         }
 
         // Waveforms
-        if (held & WPAD_BUTTON_1) g_current_wave = WAVE_SAWTOOTH;
+        if (held & WPAD_BUTTON_UP) g_current_wave = WAVE_TRIANGLE;
+        else if (held & WPAD_BUTTON_DOWN) g_current_wave = WAVE_NOISE;
+        else if (held & WPAD_BUTTON_LEFT) g_current_wave = WAVE_PULSE;
+        else if (held & WPAD_BUTTON_RIGHT) g_current_wave = WAVE_PULSE_NARROW;
+        else if (held & WPAD_BUTTON_1) g_current_wave = WAVE_SAWTOOTH;
         else if (held & WPAD_BUTTON_A) g_current_wave = WAVE_SQUARE;
         else g_current_wave = WAVE_SINE;
-
-        // Speaker
-        if (pressed & WPAD_BUTTON_PLUS) {
-            speaker_enabled = !speaker_enabled;
-            WPAD_ControlSpeaker(0, speaker_enabled ? 1 : 0);
-            if(speaker_enabled) WPAD_Rumble(0, 0); 
-        }
 
         // Raw, unsmoothed accelerometer data
         int target_freq = map_pitch_to_freq(data->orient.pitch);
@@ -239,6 +256,11 @@ int main(int argc, char **argv) {
 
         if (held & WPAD_BUTTON_B) {
             target_freq = quantize_frequency(target_freq);
+        }
+
+        // Octave Shift modifier
+        if (held & WPAD_BUTTON_2) {
+            target_freq *= 2; 
         }
 
         // Nunchuk LFO
@@ -249,7 +271,12 @@ int main(int argc, char **argv) {
             if (abs(joy_y) > 10) target_freq += (sine_table[lfo_phase] * joy_y) / 60000; 
             if (abs(joy_x) > 10) target_vol -= abs((sine_table[lfo_phase] * joy_x) / 60000);
             
-            lfo_phase = (lfo_phase + 5) % SINE_LUT_SIZE; 
+            lfo_phase = (lfo_phase + 170) % SINE_LUT_SIZE;
+        }
+
+        // Mute Gate modifier
+        if (held & WPAD_BUTTON_PLUS) {
+            target_vol = 0;
         }
 
         g_phase_step = (u32)(((float)target_freq * SINE_LUT_SIZE / SAMPLERATE) * 65536.0f);
@@ -262,23 +289,39 @@ int main(int argc, char **argv) {
             GX_DrawDone();
             GX_CopyDisp(frameBuffer, GX_TRUE);
         } else {
+            // Determine the current wave name for the text UI
+            const char* wave_name = "SINE";
+            if (g_current_wave == WAVE_SQUARE) wave_name = "SQUARE";
+            else if (g_current_wave == WAVE_SAWTOOTH) wave_name = "SAWTOOTH";
+            else if (g_current_wave == WAVE_TRIANGLE) wave_name = "TRIANGLE";
+            else if (g_current_wave == WAVE_NOISE) wave_name = "NOISE";
+            else if (g_current_wave == WAVE_PULSE) wave_name = "PULSE";
+            else if (g_current_wave == WAVE_PULSE_NARROW) wave_name = "NARROW";
+
             // Draw CPU Text UI
             printf("\x1b[1;1H"); 
             printf("--- WII MOTION SYNTH ---\n\n");
-            printf("Current Wave: %-8s\n", g_current_wave == WAVE_SINE ? "SINE" : (g_current_wave == WAVE_SQUARE ? "SQUARE" : "SAWTOOTH"));
+            printf("Current Wave: %-8s\n", wave_name);
             printf("Frequency: %4d Hz     \n", target_freq);
-            printf("Volume: %3d%%          \n", (target_vol * 100) / 255);
-            printf("Speaker: %s           \n\n", speaker_enabled ? "ON " : "OFF");
+            printf("Volume: %3d%%          \n\n", (target_vol * 100) / 255);
+            
+            printf("--- SENSOR TELEMETRY ---\n");
+            printf("Pitch (Up/Down) : %6.1f\n", data->orient.pitch);
+            printf("Roll  (Twist)   : %6.1f\n", data->orient.roll);
+            printf("Yaw   (Rotation): %6.1f\n\n", data->orient.yaw);
             
             printf("--- CONTROLS ---\n");
-            printf("Pitch (Tilt Up/Down): Frequency\n");
-            printf("Roll  (Twist L/R): Volume\n");
-            printf("Hold B: Snap-to-Scale\n");
-            printf("Hold A: Square Wave\n");
-            printf("Hold 1: Sawtooth Wave\n");
-            printf("Press PLUS: Toggle Speaker\n");
-            printf("Press MINUS: Toggle Visualizer\n");
-            printf("Press HOME: Exit\n");
+            printf("Hold B    : Snap-to-Scale\n");
+            printf("Hold A    : Square Wave\n");
+            printf("Hold 1    : Sawtooth Wave\n");
+            printf("Hold 2    : Octave Shift\n");
+            printf("D-Pad UP  : Triangle Wave\n");
+            printf("D-Pad DWN : White Noise\n");
+            printf("D-Pad LFT : Pulse Wave\n");
+            printf("D-Pad RGT : Narrow Pulse\n");
+            printf("Hold PLUS : Mute Gate\n");
+            printf("MINUS     : Toggle Visualizer\n");
+            printf("HOME      : Exit\n");
         }
 
         VIDEO_WaitVSync();
