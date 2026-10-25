@@ -1,3 +1,5 @@
+(Social experiment complete!)
+
 # Wii Motion Synth
 
 A standalone Nintendo Wii homebrew application written in C that turns the Wiimote into a motion-controlled audio synthesizer. It leverages `libogc`, `libwiiuse`, and `libasnd` to map real-time accelerometer data to audio frequency and amplitude.
