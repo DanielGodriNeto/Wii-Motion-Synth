@@ -1,3 +1,5 @@
+<!-- Document made so that anyone who contributes using AI agents don't mess up -->
+
 # AI Agent Guidelines for Wii Motion Synth
 
 This repository is public. When assisting with this codebase, all AI agents and coding assistants must adhere to the following rules:
