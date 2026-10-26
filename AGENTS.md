@@ -2,6 +2,8 @@
 
 # AI Agent Guidelines for Wii Motion Synth
 
+This file has been based on this thread: https://gbatemp.net/threads/how-to-use-ai-properly-for-wii-homebrew-development.684801/
+
 This repository is public. When assisting with this codebase, all AI agents and coding assistants must adhere to the following rules:
 
 1. **Professional Code Comments:** Do not include personalized chat references, conversational filler, or references to "we" or "us" in code comments. Keep all documentation and inline comments strictly technical, professional, and in English.
