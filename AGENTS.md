@@ -28,9 +28,9 @@ blocking operations in `audio_callback`.
 - Attribute code derived from external projects and preserve its license.
 - Do not add secrets, machine-specific paths, or personal data.
 
-English is the repository's documentation and communication language. Do not
-add Portuguese or other-language prose to source files, `README.md`,
-`CHANGELOG.md`, `CONTRIBUTING.md`, `AGENTS.md`, release notes, or metadata.
+English is the repository's documentation and communication language. Write
+source comments, user-facing text, metadata descriptions, documentation,
+release notes, and commit messages in clear, technical English.
 
 ## Build and Test
 
