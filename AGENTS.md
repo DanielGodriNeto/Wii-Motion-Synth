@@ -1,12 +1,75 @@
-<!-- Document made so that anyone who contributes using AI agents don't mess up -->
+# Wii Motion Synth Agent Guidelines
 
-# AI Agent Guidelines for Wii Motion Synth
+These instructions apply to AI agents and human contributors working in this
+repository.
 
-This file has been based on this thread: https://gbatemp.net/threads/how-to-use-ai-properly-for-wii-homebrew-development.684801/
+## Project Context
 
-This repository is public. When assisting with this codebase, all AI agents and coding assistants must adhere to the following rules:
+Wii Motion Synth is a Nintendo Wii homebrew application written in C. The
+single source file, `main.c`, combines:
 
-1. **Professional Code Comments:** Do not include personalized chat references, conversational filler, or references to "we" or "us" in code comments. Keep all documentation and inline comments strictly technical, professional, and in English.
-2. **No "Vibecoded" Clichés:** When generating or editing documentation (like `README.md`), avoid overconfident claims, excessive emojis (✨), or unnecessary padding. The tone should be concise, developer-focused, and direct.
-3. **Hardware Context:** This is a Nintendo Wii homebrew application written in C using `libogc` and `devkitPPC`. Keep in mind the hardware limitations of the PowerPC Gekko processor (e.g., avoid FPU math inside IRQ callbacks, ensure 32-byte alignment for DMA buffers).
-4. **Attribution:** If suggesting code snippets derived from other open-source projects or homebrew libraries, clearly indicate the source and its license.
+- `libogc` and GX for video initialization and the oscilloscope;
+- `libwiiuse`/WPAD for Wiimote and Nunchuk input;
+- `libasnd` for 48 kHz mono audio playback;
+- a sine lookup table and integer phase accumulation for the audio callback.
+
+Audio buffers and the lookup table are 32-byte aligned and flushed with
+`DCFlushRange` before DMA use. Avoid floating-point work, allocation, or
+blocking operations in `audio_callback`.
+
+## Coding Standards
+
+- Keep C code compatible with devkitPPC and the Wii's PowerPC 750/Gekko CPU.
+- Preserve 32-byte alignment for DMA-visible buffers.
+- Keep audio callback work bounded and real-time safe.
+- Use the existing naming and `u32`/`s16`/`float` conventions from `main.c`.
+- Keep comments technical, concise, and in English.
+- Attribute code derived from external projects and preserve its license.
+- Do not add secrets, machine-specific paths, or personal data.
+
+## Build and Test
+
+Install devkitPro with the `wii-dev` package, then configure `DEVKITPRO` and
+`DEVKITPPC` in the environment. From the repository root:
+
+```sh
+make
+```
+
+The build produces `build/WiiMotionSynth.elf` and
+`build/WiiMotionSynth.dol`. Remove generated output with:
+
+```sh
+make clean
+```
+
+There is no automated unit-test suite. Validate source changes with a clean
+build. Hardware behavior must be checked on a Wii through the Homebrew
+Channel when input, audio, video, or packaging behavior changes.
+
+## Workflow Guidelines
+
+1. Read `README.md`, `Makefile`, `.github/workflows/build.yml`, `meta.xml`, and
+   the affected C code before editing.
+2. Keep the repository's manual release workflow in mind: it builds inside
+   `devkitpro/devkitppc:latest`, packages `boot.dol`, `meta.xml`, and
+   `icon.png`, and publishes the rolling `latest` prerelease.
+3. Use a focused change and preserve unrelated worktree modifications.
+4. Update relevant documentation in the same change as code.
+5. Run `make` when the required devkitPro toolchain is available and report
+   toolchain limitations explicitly when it is not.
+
+## Strict AI Co-Author Rule
+
+Any time an AI agent modifies, creates, or refactors code, it MUST append itself
+as a co-author in the git commit message using the standard GitHub co-author
+format. If the AI agent does not know its official GitHub contributor routing
+email, it must check the repository's commit history to find previous examples
+of its own attribution, or search the web to find its correct official
+co-author tag.
+
+## Strict Documentation Sync Rule
+
+Any time an AI agent changes, adds, or removes code, it MUST simultaneously
+update the relevant documentation (README, comments, or wikis) to reflect
+those changes.
