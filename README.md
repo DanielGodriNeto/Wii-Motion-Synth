@@ -4,6 +4,12 @@ Wii Motion Synth is a standalone Nintendo Wii homebrew application written in
 C. It turns Wiimote motion into a real-time audio synthesizer with selectable
 waveforms and a GX oscilloscope.
 
+See [CHANGELOG.md](CHANGELOG.md) for release history and
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
+
+The current application metadata identifies the developer as `Wiirizon` and
+the version as `1.1.1`.
+
 ## Features
 
 - 48 kHz mono synthesis with double-buffered audio output through `libasnd`.
@@ -96,6 +102,28 @@ The GitHub Actions workflow performs these steps automatically when manually
 dispatched. It builds in the `devkitpro/devkitppc:latest` container and
 publishes a rolling `latest` prerelease.
 
+## Troubleshooting
+
+### `wii.specs` cannot be found
+
+This error usually means the compiler is not using the devkitPPC Wii
+specification files. Check that both `DEVKITPRO` and `DEVKITPPC` are set in
+the same shell where `make` is run, and verify that the `wii-dev` package is
+installed through devkitPro's package manager.
+
+On Windows, start a devkitPro/MSYS2 shell or load the devkitPro environment
+before building. Do not hard-code a local installation path in the Makefile.
+After correcting the environment, run:
+
+```sh
+make clean
+make
+```
+
+If the error persists, confirm that `powerpc-eabi-gcc` and `elf2dol` are
+available on the configured devkitPro installation and reinstall the `wii-dev`
+package if necessary.
+
 ## Architecture
 
 The project is intentionally small:
@@ -121,6 +149,15 @@ buffers aligned and flush cache ranges before passing data to DMA-backed audio
 There is currently no automated unit-test suite. A successful `make` is the
 available build validation; input and audio changes also require testing on
 real Wii hardware.
+
+## Known Limitations
+
+- Audio, motion input, GX rendering, and Homebrew Channel packaging cannot be
+  fully verified without compatible Wii hardware and a Wiimote.
+- The repository has no automated unit-test suite. A clean `make` validates
+  compilation, while runtime behavior requires manual hardware testing.
+- The rolling `latest` GitHub release is a manually dispatched prerelease, not
+  a fixed-version release artifact.
 
 ## License
 
