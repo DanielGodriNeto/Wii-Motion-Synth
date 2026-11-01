@@ -3,6 +3,11 @@
 Thank you for contributing to Wii Motion Synth. Keep changes focused,
 reproducible, and compatible with the Wii hardware.
 
+## Language
+
+Use clear, technical English for source comments, user-facing strings,
+metadata, documentation, commit bodies, and pull request descriptions.
+
 ## Prerequisites
 
 - devkitPro with the `wii-dev` package installed.

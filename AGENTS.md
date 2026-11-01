@@ -23,9 +23,14 @@ blocking operations in `audio_callback`.
 - Preserve 32-byte alignment for DMA-visible buffers.
 - Keep audio callback work bounded and real-time safe.
 - Use the existing naming and `u32`/`s16`/`float` conventions from `main.c`.
-- Keep comments technical, concise, and in English.
+- Keep all source code comments, user-facing text, metadata descriptions, and
+  repository documentation in clear, technical English.
 - Attribute code derived from external projects and preserve its license.
 - Do not add secrets, machine-specific paths, or personal data.
+
+English is the repository's documentation and communication language. Do not
+add Portuguese or other-language prose to source files, `README.md`,
+`CHANGELOG.md`, `CONTRIBUTING.md`, `AGENTS.md`, release notes, or metadata.
 
 ## Build and Test
 
