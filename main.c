@@ -8,20 +8,12 @@
 #include <malloc.h>
 #include <time.h>
 
-#define SAMPLERATE 48000
+#include "synth_core.h"
+
 #define SAMPLES_PER_BUFFER 1024
-#define SINE_LUT_SIZE 2048
 #define SINE_LUT_MASK (SINE_LUT_SIZE - 1)
 #define PI 3.14159265358979323846f
 
-// Safe range for the synth frequency in Hz, applied after quantization, octave
-// shift and Nunchuk LFO. Pitch can exceed the expected -90..90 degree range and
-// the LFO can push the value past its limits. The ceiling is 2100 Hz so the top
-// scale note (1047 Hz) under octave shift (2094 Hz) is not clipped.
-#define MIN_TARGET_FREQ_HZ 100
-#define MAX_TARGET_FREQ_HZ 2100
-
-typedef enum { WAVE_SINE, WAVE_SQUARE, WAVE_SAWTOOTH, WAVE_TRIANGLE, WAVE_NOISE, WAVE_PULSE, WAVE_PULSE_NARROW } WaveType;
 static volatile WaveType g_current_wave = WAVE_SINE;
 
 static s16 sine_table[SINE_LUT_SIZE] ATTRIBUTE_ALIGN(32);
@@ -68,24 +60,10 @@ static s32 noise_sample(u32 *state, u32 vol) {
 // (single voice, like phase_accumulator).
 static u32 noise_state = NOISE_SEED_FALLBACK;
 
-int map_pitch_to_freq(float pitch) {
-    if (!isfinite(pitch)) return MIN_TARGET_FREQ_HZ; // NaN/inf must not reach the int cast
-    pitch = fmaxf(-1000.0f, fminf(pitch, 1000.0f)); // bound finite values before the int cast
-    return 100 + ((pitch + 90.0f) / 180.0f) * 900;
-}
-
-static int clamp_target_freq(int hz) {
-    if (hz < MIN_TARGET_FREQ_HZ) return MIN_TARGET_FREQ_HZ;
-    if (hz > MAX_TARGET_FREQ_HZ) return MAX_TARGET_FREQ_HZ;
-    return hz;
-}
-
-int map_roll_to_vol(float roll) {
-    int vol = 255 - (abs((int)roll) * 255 / 180);
-    if(vol < 0) vol = 0;
-    if(vol > 255) vol = 255;
-    return vol;
-}
+// Runtime settings. Read and written by the main loop only. audio_callback never
+// sees this struct: it consumes the bounded values already derived from it
+// (g_phase_step, g_vol_scale, g_current_wave), each a single aligned 32-bit store.
+static SynthSettings g_settings;
 
 void init_sine_table(void) {
     for (int i = 0; i < SINE_LUT_SIZE; i++) {
@@ -133,37 +111,6 @@ void audio_callback(int voice) {
     DCFlushRange(buf, SAMPLES_PER_BUFFER * sizeof(s16));
     ASND_AddVoice(voice, buf, SAMPLES_PER_BUFFER * sizeof(s16));
     current_buffer ^= 1;
-}
-
-const int SCALE_FREQS[] = {
-    131, 147, 165, 196, 220, 262, 294, 330, 392, 440, 523, 587, 659, 784, 880, 1047
-};
-#define NUM_NOTES (sizeof(SCALE_FREQS)/sizeof(SCALE_FREQS[0]))
-
-int quantize_frequency(int raw_freq) {
-    int closest_freq = SCALE_FREQS[0];
-    int min_diff = 9999;
-    for(int i = 0; i < NUM_NOTES; i++) {
-        int diff = abs(raw_freq - SCALE_FREQS[i]);
-        if(diff < min_diff) {
-            min_diff = diff;
-            closest_freq = SCALE_FREQS[i];
-        }
-    }
-    return closest_freq;
-}
-
-// Pure: pitch -> synth frequency in Hz. Order: quantize, octave shift, LFO, clamp.
-static int synth_target_freq(float pitch, bool snap, bool octave, int lfo_offset_hz) {
-    int freq = map_pitch_to_freq(pitch);
-    if (snap) freq = quantize_frequency(freq);
-    if (octave) freq *= 2;
-    return clamp_target_freq(freq + lfo_offset_hz);
-}
-
-// Pure: frequency in Hz -> phase step for audio_callback (computed outside it).
-static u32 freq_to_phase_step(int hz) {
-    return (u32)(((float)hz * SINE_LUT_SIZE / SAMPLERATE) * 65536.0f);
 }
 
 // --- FEATURE: VISUAL OSCILLOSCOPE (ZOOMED IN) ---
@@ -248,6 +195,9 @@ int main(int argc, char **argv) {
 
     bool show_oscilloscope = true; 
     bool show_welcome = true; // New Welcome Screen State
+    bool show_settings = false;
+    int menu_row = 0;
+    settings_defaults(&g_settings);
     int lfo_phase = 0;
 
     // Clear the console text before starting
@@ -286,12 +236,55 @@ int main(int argc, char **argv) {
                 printf("      D-Pad RGT : Narrow Pulse\n");
                 printf("      Hold PLUS : Mute Gate\n");
                 printf("      MINUS     : Toggle Oscilloscope / Stats UI\n");
-                printf("      Nunchuk   : Joystick LFO (Vibrato & Tremolo)\n\n\n");
+                printf("      Nunchuk   : Joystick LFO (Vibrato & Tremolo)\n");
+                printf("      + then -  : Settings (sensitivity, pitch range)\n\n");
                 printf("                    >> PRESS 'A' TO START <<\n");
 
                 g_vol_scale = 0; // Keep the synth completely silent 
                 VIDEO_WaitVSync();
                 continue; // Skip the rest of the audio/render loop
+            }
+        }
+
+        // --- SETTINGS MENU (hold + and press - to open or close) ---
+        // + and - are used instead of 1 and 2 because holding 1 (sawtooth) with 2 (octave)
+        // is an existing playing combination.
+        if ((held & WPAD_BUTTON_PLUS) && (held & WPAD_BUTTON_MINUS) &&
+            (pressed & (WPAD_BUTTON_PLUS | WPAD_BUTTON_MINUS))) {
+            show_settings = !show_settings;
+            pressed &= ~WPAD_BUTTON_MINUS; // Do not also toggle the oscilloscope
+            printf("\x1b[2J");
+        }
+        if (show_settings) {
+            g_vol_scale = 0; // Silent while editing
+            if (pressed & WPAD_BUTTON_DOWN) menu_row = (menu_row + 1) % FIELD_COUNT;
+            if (pressed & WPAD_BUTTON_UP) menu_row = (menu_row + FIELD_COUNT - 1) % FIELD_COUNT;
+            if (pressed & WPAD_BUTTON_RIGHT) settings_field_adjust(&g_settings, (SettingsField)menu_row, 1);
+            if (pressed & WPAD_BUTTON_LEFT) settings_field_adjust(&g_settings, (SettingsField)menu_row, -1);
+            if (pressed & WPAD_BUTTON_A) {
+                if (menu_row == FIELD_RESET) settings_field_adjust(&g_settings, FIELD_RESET, 1);
+                if (menu_row == FIELD_BACK) {
+                    show_settings = false;
+                    printf("\x1b[2J");
+                }
+            }
+            if (show_settings) {
+                printf("\x1b[4;1H");
+                printf("             ========================================\n");
+                printf("                            SETTINGS                 \n");
+                printf("             ========================================\n\n");
+                for (int f = 0; f < FIELD_COUNT; f++) {
+                    char line[48];
+                    settings_field_text(&g_settings, (SettingsField)f, line, sizeof(line));
+                    printf("      %c %-36s\n", (f == menu_row) ? '>' : ' ', line);
+                }
+                printf("\n      UP/DOWN    : Select\n");
+                printf("      LEFT/RIGHT : Change value\n");
+                printf("      A          : Confirm Reset / Back\n");
+                printf("      + then -   : Close\n\n");
+                printf("      Settings are not saved yet; they reset on restart.\n");
+                VIDEO_WaitVSync();
+                continue;
             }
         }
 
@@ -333,9 +326,10 @@ int main(int argc, char **argv) {
         if (held & WPAD_BUTTON_PLUS) {
             target_vol = 0;
         }
+        if (target_vol < 0) target_vol = 0; // The tremolo subtraction must not wrap g_vol_scale
 
         int target_freq = synth_target_freq(data->orient.pitch, (held & WPAD_BUTTON_B) != 0,
-                                            (held & WPAD_BUTTON_2) != 0, lfo_offset_hz);
+                                            (held & WPAD_BUTTON_2) != 0, lfo_offset_hz, &g_settings);
         g_phase_step = freq_to_phase_step(target_freq);
         g_vol_scale = target_vol;
 
@@ -360,7 +354,9 @@ int main(int argc, char **argv) {
             printf("--- WII MOTION SYNTH ---\n\n");
             printf("Current Wave: %-8s\n", wave_name);
             printf("Frequency: %4d Hz     \n", target_freq);
-            printf("Volume: %3d%%          \n\n", (target_vol * 100) / 255);
+            printf("Volume: %3d%%          \n", (target_vol * 100) / 255);
+            printf("Range: %4d-%4d Hz  Sens: %3d%%   \n\n", g_settings.pitch_min_hz, g_settings.pitch_max_hz,
+                   g_settings.sensitivity_pct);
             
             printf("--- SENSOR TELEMETRY ---\n");
             printf("Pitch (Up/Down) : %6.1f\n", data->orient.pitch);
@@ -377,6 +373,7 @@ int main(int argc, char **argv) {
             printf("D-Pad LFT : Pulse Wave\n");
             printf("D-Pad RGT : Narrow Pulse\n");
             printf("Hold PLUS : Mute Gate\n");
+            printf("+ then -  : Settings\n");
             printf("MINUS     : Toggle Visualizer\n");
             printf("HOME      : Exit\n");
         }

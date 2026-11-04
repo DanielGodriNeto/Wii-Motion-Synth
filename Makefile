@@ -4,7 +4,7 @@
 
 APP_NAME    := WiiMotionSynth
 BUILD_DIR   := build
-SRCS        := main.c
+SRCS        := main.c synth_core.c
 
 # Rely on environment variables set by devkitPro instead of hardcoded Windows paths
 ifeq ($(strip $(DEVKITPRO)),)
