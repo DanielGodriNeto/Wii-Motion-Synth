@@ -2,6 +2,14 @@
 
 All notable changes to Wii Motion Synth are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- White-noise output no longer calls `rand()` once per sample inside the
+  audio callback. It now uses a xorshift32 generator whose state lives in
+  `main.c`. The seed still comes from the clock at startup.
+
 ## [1.1.1] - 2026-11-01
 
 ### Changed
