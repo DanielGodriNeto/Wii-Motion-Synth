@@ -6,6 +6,13 @@ All notable changes to Wii Motion Synth are documented here.
 
 ### Fixed
 
+- Clamped the synth frequency to 100-2100 Hz after quantization, octave shift,
+  and Nunchuk LFO, so out-of-range or noisy pitch values can no longer produce
+  an invalid phase step. Tilt maps to 100-1000 Hz; octave shift and the LFO can
+  push the output up to the 2100 Hz ceiling. The displayed frequency uses the
+  same clamped value.
+- Non-finite pitch values now map to the 100 Hz floor instead of an undefined
+  float-to-int conversion.
 - White-noise output no longer calls `rand()` once per sample inside the
   audio callback. It now uses a xorshift32 generator whose state lives in
   `main.c`. The seed still comes from the clock at startup.
