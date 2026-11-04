@@ -32,6 +32,42 @@ static u32 phase_accumulator = 0;
 static volatile u32 g_phase_step = 0;
 static volatile u32 g_vol_scale = 204; 
 
+// BEGIN noise-prng
+// White-noise generator for the audio callback: xorshift32 (Marsaglia 13/17/5).
+// Only shifts and xors: no libc call, no float, no allocation, bounded cost.
+#define NOISE_SEED_FALLBACK 0x2545F491u
+
+// Multiplying by an odd constant is a bijection mod 2^32, so only raw == 0
+// maps to 0. xorshift32 must never reach state 0, hence the fallback.
+static u32 noise_seed(u32 raw) {
+    u32 seed = raw * 0x9E3779B9u;
+    if (seed == 0u) {
+        return NOISE_SEED_FALLBACK;
+    }
+    return seed;
+}
+
+static u32 xorshift32_next(u32 *state) {
+    u32 x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    return x;
+}
+
+// Returns a sample in -128..127 scaled by vol. The product is computed
+// modulo 2^32 (u32), so every vol value wraps the same way as other waves.
+static s32 noise_sample(u32 *state, u32 vol) {
+    s32 centered = (s32)(xorshift32_next(state) >> 24) - 128;
+    return (s32)((u32)centered * vol);
+}
+// END noise-prng
+
+// Written once in main() before ASND_SetVoice, then only by audio_callback
+// (single voice, like phase_accumulator).
+static u32 noise_state = NOISE_SEED_FALLBACK;
+
 int map_pitch_to_freq(float pitch) {
     if (!isfinite(pitch)) return MIN_TARGET_FREQ_HZ; // NaN/inf must not reach the int cast
     pitch = fmaxf(-1000.0f, fminf(pitch, 1000.0f)); // bound finite values before the int cast
@@ -81,7 +117,7 @@ void audio_callback(int voice) {
             s32 val = (pos * (s32)vol * 255) / half_size;
             sample = (lut_index < half_size) ? (val - (vol * 127)) : ((vol * 127) - val);
         } else if (wave == WAVE_NOISE) {
-            sample = ((rand() % 256) - 128) * vol;
+            sample = noise_sample(&noise_state, vol);
         } else if (wave == WAVE_PULSE) {
             // Pulse wave with 25% duty cycle (SINE_LUT_SIZE / 4)
             sample = (lut_index < (SINE_LUT_SIZE / 4)) ? (vol * 127) : -(vol * 127);
@@ -146,7 +182,7 @@ void draw_oscilloscope(short* audio_buffer, u32 buffer_size) {
 }
 
 int main(int argc, char **argv) {
-    srand(time(NULL));
+    noise_state = noise_seed((u32)time(NULL));
 
     init_sine_table();
     memset(audio_buffers, 0, sizeof(audio_buffers));
