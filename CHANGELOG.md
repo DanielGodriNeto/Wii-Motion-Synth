@@ -2,6 +2,18 @@
 
 All notable changes to Wii Motion Synth are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Clamped the synth frequency to 100-2100 Hz after quantization, octave shift,
+  and Nunchuk LFO, so out-of-range or noisy pitch values can no longer produce
+  an invalid phase step. Tilt maps to 100-1000 Hz; octave shift and the LFO can
+  push the output up to the 2100 Hz ceiling. The displayed frequency uses the
+  same clamped value.
+- Non-finite pitch values now map to the 100 Hz floor instead of an undefined
+  float-to-int conversion.
+
 ## [1.1.1] - 2026-11-01
 
 ### Changed

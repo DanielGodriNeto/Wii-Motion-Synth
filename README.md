@@ -15,7 +15,7 @@ the version as `1.1.1`.
 - 48 kHz mono synthesis with double-buffered audio output through `libasnd`.
 - Sine, square, sawtooth, triangle, white-noise, pulse, and narrow-pulse
   waveforms.
-- Pitch mapped from Wiimote tilt and volume mapped from roll.
+- Tilt maps to 100-1000 Hz. Octave shift and the Nunchuk LFO can push the output up to the 100-2100 Hz safe clamp. Volume is mapped from roll.
 - Optional C-major pentatonic quantization.
 - Nunchuk joystick vibrato and tremolo.
 - GX waveform oscilloscope and a text statistics screen.
@@ -25,7 +25,7 @@ the version as `1.1.1`.
 
 | Input | Action |
 | --- | --- |
-| Tilt up/down | Adjust pitch |
+| Tilt up/down | Adjust pitch, 100-1000 Hz (octave shift and LFO can reach the 2100 Hz clamp) |
 | Roll left/right | Adjust volume |
 | Hold `A` | Square wave |
 | Hold `1` | Sawtooth wave |

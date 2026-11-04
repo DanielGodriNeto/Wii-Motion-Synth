@@ -14,6 +14,13 @@
 #define SINE_LUT_MASK (SINE_LUT_SIZE - 1)
 #define PI 3.14159265358979323846f
 
+// Safe range for the synth frequency in Hz, applied after quantization, octave
+// shift and Nunchuk LFO. Pitch can exceed the expected -90..90 degree range and
+// the LFO can push the value past its limits. The ceiling is 2100 Hz so the top
+// scale note (1047 Hz) under octave shift (2094 Hz) is not clipped.
+#define MIN_TARGET_FREQ_HZ 100
+#define MAX_TARGET_FREQ_HZ 2100
+
 typedef enum { WAVE_SINE, WAVE_SQUARE, WAVE_SAWTOOTH, WAVE_TRIANGLE, WAVE_NOISE, WAVE_PULSE, WAVE_PULSE_NARROW } WaveType;
 static volatile WaveType g_current_wave = WAVE_SINE;
 
@@ -26,7 +33,15 @@ static volatile u32 g_phase_step = 0;
 static volatile u32 g_vol_scale = 204; 
 
 int map_pitch_to_freq(float pitch) {
+    if (!isfinite(pitch)) return MIN_TARGET_FREQ_HZ; // NaN/inf must not reach the int cast
+    pitch = fmaxf(-1000.0f, fminf(pitch, 1000.0f)); // bound finite values before the int cast
     return 100 + ((pitch + 90.0f) / 180.0f) * 900;
+}
+
+static int clamp_target_freq(int hz) {
+    if (hz < MIN_TARGET_FREQ_HZ) return MIN_TARGET_FREQ_HZ;
+    if (hz > MAX_TARGET_FREQ_HZ) return MAX_TARGET_FREQ_HZ;
+    return hz;
 }
 
 int map_roll_to_vol(float roll) {
@@ -100,6 +115,19 @@ int quantize_frequency(int raw_freq) {
         }
     }
     return closest_freq;
+}
+
+// Pure: pitch -> synth frequency in Hz. Order: quantize, octave shift, LFO, clamp.
+static int synth_target_freq(float pitch, bool snap, bool octave, int lfo_offset_hz) {
+    int freq = map_pitch_to_freq(pitch);
+    if (snap) freq = quantize_frequency(freq);
+    if (octave) freq *= 2;
+    return clamp_target_freq(freq + lfo_offset_hz);
+}
+
+// Pure: frequency in Hz -> phase step for audio_callback (computed outside it).
+static u32 freq_to_phase_step(int hz) {
+    return (u32)(((float)hz * SINE_LUT_SIZE / SAMPLERATE) * 65536.0f);
 }
 
 // --- FEATURE: VISUAL OSCILLOSCOPE (ZOOMED IN) ---
@@ -251,24 +279,15 @@ int main(int argc, char **argv) {
         else g_current_wave = WAVE_SINE;
 
         // Raw, unsmoothed accelerometer data
-        int target_freq = map_pitch_to_freq(data->orient.pitch);
         int target_vol = map_roll_to_vol(data->orient.roll);
+        int lfo_offset_hz = 0;
 
-        if (held & WPAD_BUTTON_B) {
-            target_freq = quantize_frequency(target_freq);
-        }
-
-        // Octave Shift modifier
-        if (held & WPAD_BUTTON_2) {
-            target_freq *= 2; 
-        }
-
-        // Nunchuk LFO
+        // Nunchuk LFO (frequency offset is applied inside synth_target_freq)
         if (data->exp.type == WPAD_EXP_NUNCHUK) {
             int joy_y = (int)data->exp.nunchuk.js.pos.y - (int)data->exp.nunchuk.js.center.y;
             int joy_x = (int)data->exp.nunchuk.js.pos.x - (int)data->exp.nunchuk.js.center.x;
             
-            if (abs(joy_y) > 10) target_freq += (sine_table[lfo_phase] * joy_y) / 60000; 
+            if (abs(joy_y) > 10) lfo_offset_hz = (sine_table[lfo_phase] * joy_y) / 60000;
             if (abs(joy_x) > 10) target_vol -= abs((sine_table[lfo_phase] * joy_x) / 60000);
             
             lfo_phase = (lfo_phase + 170) % SINE_LUT_SIZE;
@@ -279,7 +298,9 @@ int main(int argc, char **argv) {
             target_vol = 0;
         }
 
-        g_phase_step = (u32)(((float)target_freq * SINE_LUT_SIZE / SAMPLERATE) * 65536.0f);
+        int target_freq = synth_target_freq(data->orient.pitch, (held & WPAD_BUTTON_B) != 0,
+                                            (held & WPAD_BUTTON_2) != 0, lfo_offset_hz);
+        g_phase_step = freq_to_phase_step(target_freq);
         g_vol_scale = target_vol;
 
         // --- RENDER LOGIC ---
