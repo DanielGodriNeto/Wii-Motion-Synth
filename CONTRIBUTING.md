@@ -36,7 +36,8 @@ make clean
 make
 ```
 
-There is no automated unit-test suite. For changes affecting input, audio,
+Run the host tests for the pure logic with `make -C tests` (gcc and make only).
+For changes affecting input, audio,
 video, or the Homebrew Channel package, test the resulting
 `build/WiiMotionSynth.dol` on real Wii hardware when available.
 

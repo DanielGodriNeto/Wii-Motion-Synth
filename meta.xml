@@ -19,6 +19,7 @@ Controls:
 - D-Pad LFT: Pulse Wave
 - D-Pad RGT: Narrow Pulse
 - Hold PLUS: Mute Gate
+- Hold PLUS, press MINUS: Settings (sensitivity, pitch range)
 - MINUS: Toggle Oscilloscope / Stats UI
 - Nunchuk: Joystick controls LFO (Vibrato/Tremolo)
 - HOME: Exit
