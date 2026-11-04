@@ -139,12 +139,17 @@ The audio callback uses a phase accumulator and a 2048-entry sine lookup table.
 The main loop updates `g_phase_step`, `g_vol_scale`, and the selected waveform;
 the callback consumes those values while filling the alternating audio buffers.
 
+White noise uses a xorshift32 generator. Its state is a `static` variable
+seeded from the clock at startup and advanced only by the audio callback.
+
 ## Development Notes
 
 The Wii audio callback is real-time code. Do not introduce blocking calls,
 dynamic allocation, or expensive floating-point calculations there. Keep
 buffers aligned and flush cache ranges before passing data to DMA-backed audio
- APIs. Changes to controls must be reflected in this README and `meta.xml`.
+ APIs. Do not call libc `rand()` or other shared-state functions there; keep
+generator state in `static` variables that only the callback updates.
+Changes to controls must be reflected in this README and `meta.xml`.
 
 There is currently no automated unit-test suite. A successful `make` is the
 available build validation; input and audio changes also require testing on
