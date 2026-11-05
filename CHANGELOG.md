@@ -6,10 +6,11 @@ All notable changes to Wii Motion Synth are documented here.
 
 ### Added
 
+- Four settings presets on the SD card (`sd:/apps/WiiMotionSynth/preset<1-4>.cfg`),
+  with default wave, snap and roll-volume options; slot 1 loads at startup.
 - Settings menu (hold `+`, press `-`) with adjustable motion
   sensitivity (25-400 %) and pitch range (minimum 100-1000 Hz, maximum up to
   1050 Hz, at least 50 Hz apart). Defaults reproduce the previous mapping.
-  Settings are kept in RAM only and reset on restart.
 - Host unit tests (`make -C tests`) for the pure logic, now in
   `synth_core.c`, and a static guard for `audio_callback`.
 

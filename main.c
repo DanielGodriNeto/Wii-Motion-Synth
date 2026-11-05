@@ -7,8 +7,12 @@
 #include <string.h>
 #include <malloc.h>
 #include <time.h>
+#include <fat.h>
 
 #include "synth_core.h"
+#include "preset_store.h"
+#include "preset_io.h"
+#include "preset_fs_stdio.h"
 
 #define SAMPLES_PER_BUFFER 1024
 #define SINE_LUT_MASK (SINE_LUT_SIZE - 1)
@@ -128,6 +132,16 @@ void draw_oscilloscope(short* audio_buffer, u32 buffer_size) {
     GX_End();
 }
 
+// Presets: the SD card is mounted on first use, never in the audio callback.
+static bool g_fat_ok = false;
+
+static bool sd_mount(void) {
+    if (!g_fat_ok) g_fat_ok = fatInitDefault();
+    return g_fat_ok;
+}
+
+#define STATUS_FRAMES 240 // about 4 seconds at 60 Hz
+
 int main(int argc, char **argv) {
     noise_state = noise_seed((u32)time(NULL));
 
@@ -200,6 +214,18 @@ int main(int argc, char **argv) {
     settings_defaults(&g_settings);
     int lfo_phase = 0;
 
+    StdioFsCtx sd_ctx = { sd_mount };
+    PresetFs sd_fs;
+    preset_fs_stdio_init(&sd_fs, &sd_ctx, PRESET_DIR);
+    int preset_slot = PRESET_SLOT_MIN;
+    char status[48] = "";
+    int status_frames = 0;
+    {
+        // Silent auto-load of slot 1: a missing card or file keeps the defaults.
+        SynthSettings loaded;
+        if (preset_load(&sd_fs, PRESET_SLOT_MIN, &loaded) == PRESET_OK) g_settings = loaded;
+    }
+
     // Clear the console text before starting
     printf("\x1b[2J"); 
 
@@ -259,9 +285,27 @@ int main(int argc, char **argv) {
             g_vol_scale = 0; // Silent while editing
             if (pressed & WPAD_BUTTON_DOWN) menu_row = (menu_row + 1) % FIELD_COUNT;
             if (pressed & WPAD_BUTTON_UP) menu_row = (menu_row + FIELD_COUNT - 1) % FIELD_COUNT;
-            if (pressed & WPAD_BUTTON_RIGHT) settings_field_adjust(&g_settings, (SettingsField)menu_row, 1);
-            if (pressed & WPAD_BUTTON_LEFT) settings_field_adjust(&g_settings, (SettingsField)menu_row, -1);
+            if (menu_row == FIELD_SLOT) {
+                if (pressed & WPAD_BUTTON_RIGHT) preset_slot = preset_slot % PRESET_SLOT_MAX + 1;
+                if (pressed & WPAD_BUTTON_LEFT) preset_slot = (preset_slot + PRESET_SLOT_MAX - 2) % PRESET_SLOT_MAX + 1;
+            } else {
+                if (pressed & WPAD_BUTTON_RIGHT) settings_field_adjust(&g_settings, (SettingsField)menu_row, 1);
+                if (pressed & WPAD_BUTTON_LEFT) settings_field_adjust(&g_settings, (SettingsField)menu_row, -1);
+            }
             if (pressed & WPAD_BUTTON_A) {
+                if (menu_row == FIELD_SAVE || menu_row == FIELD_LOAD) {
+                    PresetResult pr;
+                    if (menu_row == FIELD_SAVE) {
+                        pr = preset_save(&sd_fs, preset_slot, &g_settings);
+                    } else {
+                        SynthSettings loaded;
+                        pr = preset_load(&sd_fs, preset_slot, &loaded);
+                        if (pr == PRESET_OK) g_settings = loaded;
+                    }
+                    snprintf(status, sizeof(status), "%s slot %d: %s", (menu_row == FIELD_SAVE) ? "Save" : "Load",
+                             preset_slot, preset_strerror(pr));
+                    status_frames = STATUS_FRAMES;
+                }
                 if (menu_row == FIELD_RESET) settings_field_adjust(&g_settings, FIELD_RESET, 1);
                 if (menu_row == FIELD_BACK) {
                     show_settings = false;
@@ -275,14 +319,17 @@ int main(int argc, char **argv) {
                 printf("             ========================================\n\n");
                 for (int f = 0; f < FIELD_COUNT; f++) {
                     char line[48];
-                    settings_field_text(&g_settings, (SettingsField)f, line, sizeof(line));
+                    if (f == FIELD_SLOT) snprintf(line, sizeof(line), "Preset slot: %d", preset_slot);
+                    else settings_field_text(&g_settings, (SettingsField)f, line, sizeof(line));
                     printf("      %c %-36s\n", (f == menu_row) ? '>' : ' ', line);
                 }
                 printf("\n      UP/DOWN    : Select\n");
                 printf("      LEFT/RIGHT : Change value\n");
                 printf("      A          : Confirm Reset / Back\n");
                 printf("      + then -   : Close\n\n");
-                printf("      Settings are not saved yet; they reset on restart.\n");
+                printf("      Slot 1 is loaded at startup; save to keep settings.\n");
+                printf("      %-48s\n", (status_frames > 0) ? status : "");
+                if (status_frames > 0) status_frames--;
                 VIDEO_WaitVSync();
                 continue;
             }
@@ -305,10 +352,10 @@ int main(int argc, char **argv) {
         else if (held & WPAD_BUTTON_RIGHT) g_current_wave = WAVE_PULSE_NARROW;
         else if (held & WPAD_BUTTON_1) g_current_wave = WAVE_SAWTOOTH;
         else if (held & WPAD_BUTTON_A) g_current_wave = WAVE_SQUARE;
-        else g_current_wave = WAVE_SINE;
+        else g_current_wave = (WaveType)g_settings.wave_default;
 
         // Raw, unsmoothed accelerometer data
-        int target_vol = map_roll_to_vol(data->orient.roll);
+        int target_vol = synth_volume_for_roll(&g_settings, data->orient.roll);
         int lfo_offset_hz = 0;
 
         // Nunchuk LFO (frequency offset is applied inside synth_target_freq)
@@ -328,7 +375,7 @@ int main(int argc, char **argv) {
         }
         if (target_vol < 0) target_vol = 0; // The tremolo subtraction must not wrap g_vol_scale
 
-        int target_freq = synth_target_freq(data->orient.pitch, (held & WPAD_BUTTON_B) != 0,
+        int target_freq = synth_target_freq(data->orient.pitch, synth_snap_active(&g_settings, (held & WPAD_BUTTON_B) != 0),
                                             (held & WPAD_BUTTON_2) != 0, lfo_offset_hz, &g_settings);
         g_phase_step = freq_to_phase_step(target_freq);
         g_vol_scale = target_vol;
