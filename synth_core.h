@@ -50,19 +50,39 @@ typedef struct {
     int sensitivity_pct;
     int pitch_min_hz;
     int pitch_max_hz;
+    int wave_default;   /* WaveType, 0..WAVE_COUNT-1 */
+    int snap_default;   /* 0 or 1 */
+    int roll_volume;    /* 0 or 1; 0 fixes the volume at 204 */
 } SynthSettings;
 
 typedef enum {
     FIELD_SENS,
     FIELD_PITCH_MIN,
     FIELD_PITCH_MAX,
+    FIELD_WAVE,
+    FIELD_SNAP,
+    FIELD_ROLL,
+    FIELD_SLOT,
+    FIELD_SAVE,
+    FIELD_LOAD,
     FIELD_RESET,
     FIELD_BACK,
     FIELD_COUNT
 } SettingsField;
 
 void settings_defaults(SynthSettings *s);
+/* Clamps numbers into their ranges, maps an out-of-range wave to WAVE_SINE and
+ * any nonzero flag to 1. Idempotent. */
 void settings_sanitize(SynthSettings *s);
+
+/* Lowercase name of a wave ("sine", ..., "narrow"); out-of-range maps to "sine". */
+const char *settings_wave_name(int wave);
+
+/* Snap is on when held XOR snap_default. */
+bool synth_snap_active(const SynthSettings *s, bool b_held);
+
+/* Volume 204 when roll_volume is 0 (any roll), else map_roll_to_vol(roll). */
+int synth_volume_for_roll(const SynthSettings *s, float roll);
 
 /* Maps pitch (degrees) to a frequency in Hz inside [pitch_min, pitch_max] of
  * the sanitized settings. Non-finite pitch returns pitch_min. */
