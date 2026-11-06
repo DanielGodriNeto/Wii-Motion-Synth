@@ -15,7 +15,9 @@ the version as `1.1.1`.
 - 48 kHz mono synthesis with double-buffered audio output through `libasnd`.
 - Sine, square, sawtooth, triangle, white-noise, pulse, and narrow-pulse
   waveforms.
-- Tilt maps to 100-1000 Hz. Octave shift and the Nunchuk LFO can push the output up to the 100-2100 Hz safe clamp. Volume is mapped from roll.
+- Tilt maps to 100-1000 Hz by default. Octave shift and the Nunchuk LFO can push the output up to the 100-2100 Hz safe clamp. Volume is mapped from roll.
+- Adjustable motion sensitivity (25-400 %) and pitch range (100-1050 Hz) from an
+  in-app settings menu; every value is bounded. See [docs/SETTINGS.md](docs/SETTINGS.md).
 - Optional C-major pentatonic quantization.
 - Nunchuk joystick vibrato and tremolo.
 - GX waveform oscilloscope and a text statistics screen.
@@ -36,6 +38,7 @@ the version as `1.1.1`.
 | Hold `B` | Quantize pitch to the C-major pentatonic scale |
 | Hold `2` | Octave shift |
 | Hold `+` | Mute gate |
+| Hold `+`, press `-` | Open or close the settings menu (D-pad to navigate, `A` for Reset/Back) |
 | `-` | Toggle oscilloscope/statistics UI |
 | Nunchuk joystick | Vibrato and tremolo LFO |
 | `HOME` | Exit |
@@ -130,6 +133,11 @@ The project is intentionally small:
 
 - `main.c` initializes video, input, and audio; maps motion to synthesis
   parameters; renders the UI; and implements the audio callback.
+- `synth_core.c` / `synth_core.h` hold the pure logic (settings and their
+  bounds, pitch and roll mapping, quantization, phase step). They use no
+  libogc header, so the host tests build them directly.
+- `tests/` contains the host unit tests and a static guard for the audio
+  callback (see Development Notes).
 - `Makefile` compiles `main.c` with devkitPPC and converts the ELF to a DOL.
 - `meta.xml` supplies Homebrew Channel metadata and documents the controls.
 - `.github/workflows/build.yml` defines the manual build-and-release workflow.
@@ -151,16 +159,26 @@ buffers aligned and flush cache ranges before passing data to DMA-backed audio
 generator state in `static` variables that only the callback updates.
 Changes to controls must be reflected in this README and `meta.xml`.
 
-There is currently no automated unit-test suite. A successful `make` is the
-available build validation; input and audio changes also require testing on
-real Wii hardware.
+Host unit tests cover the pure logic in `synth_core.c`. They need only `gcc`
+and `make`, not devkitPPC:
+
+```sh
+make -C tests            # unit tests + audio_callback static guard
+make -C tests SAN=1      # same with UndefinedBehaviorSanitizer (needs libubsan)
+```
+
+`tests/check_callback.sh` fails if `audio_callback` mentions allocation, file
+I/O, `rand()`, locks, floating point, or the settings module. A successful
+`make` is the build validation for the console code; input and audio changes
+also require testing on real Wii hardware.
 
 ## Known Limitations
 
 - Audio, motion input, GX rendering, and Homebrew Channel packaging cannot be
   fully verified without compatible Wii hardware and a Wiimote.
-- The repository has no automated unit-test suite. A clean `make` validates
-  compilation, while runtime behavior requires manual hardware testing.
+- The host tests cover the pure logic only. A clean `make` validates
+  compilation of the console code, while the settings menu, input, and audio
+  behavior require manual hardware testing.
 - The rolling `latest` GitHub release is a manually dispatched prerelease, not
   a fixed-version release artifact.
 

@@ -6,7 +6,7 @@ repository.
 ## Project Context
 
 Wii Motion Synth is a Nintendo Wii homebrew application written in C. The
-single source file, `main.c`, combines:
+main source file, `main.c`, combines:
 
 - `libogc` and GX for video initialization and the oscilloscope;
 - `libwiiuse`/WPAD for Wiimote and Nunchuk input;
@@ -48,8 +48,9 @@ The build produces `build/WiiMotionSynth.elf` and
 make clean
 ```
 
-There is no automated unit-test suite. Validate source changes with a clean
-build. Hardware behavior must be checked on a Wii through the Homebrew
+Pure logic lives in `synth_core.c` and is covered by host tests: run
+`make -C tests` (gcc and make only). Validate console changes with a clean
+`make`. Hardware behavior must be checked on a Wii through the Homebrew
 Channel when input, audio, video, or packaging behavior changes.
 
 ## Workflow Guidelines
