@@ -8,7 +8,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release history and
 [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 The current application metadata identifies the developer as `Wiirizon` and
-the version as `1.1.1`.
+the version as `1.2.0`.
 
 ## Features
 
@@ -48,8 +48,8 @@ When no waveform selector is held, the application uses the sine waveform.
 ## Installation on Real Hardware
 
 1. Format an SD card as FAT32.
-2. Download `WiiMotionSynth-latest.zip` from the
-   [GitHub Releases page](https://github.com/Wiirizon/Wii-Motion-Synth/releases).
+2. Download `WiiMotionSynth-v1.2.0.zip` from the
+   [v1.2.0 GitHub release](https://github.com/Wiirizon/Wii-Motion-Synth/releases/tag/v1.2.0).
 3. Extract the archive at the SD-card root. The resulting application directory
    is `apps/WiiMotionSynth/` and contains `boot.dol`, `meta.xml`, and
    `icon.png`.
@@ -98,7 +98,7 @@ mkdir -p apps/WiiMotionSynth
 cp build/WiiMotionSynth.dol apps/WiiMotionSynth/boot.dol
 cp meta.xml apps/WiiMotionSynth/
 cp icon.png apps/WiiMotionSynth/
-zip -r WiiMotionSynth-latest.zip apps/
+zip -r WiiMotionSynth-v1.2.0.zip apps/
 ```
 
 The GitHub Actions workflow performs these steps automatically when manually
