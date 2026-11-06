@@ -9,6 +9,12 @@ static const int SCALE_FREQS[] = {
 };
 #define NUM_NOTES (sizeof(SCALE_FREQS) / sizeof(SCALE_FREQS[0]))
 
+#define ROLL_FIXED_VOLUME 204
+
+static const char *const WAVE_NAMES[WAVE_COUNT] = {
+    "sine", "square", "sawtooth", "triangle", "noise", "pulse", "narrow"
+};
+
 static int clamp_int(int value, int lo, int hi) {
     if (value < lo) return lo;
     if (value > hi) return hi;
@@ -19,10 +25,21 @@ static int clamp_target_freq(int hz) {
     return clamp_int(hz, MIN_TARGET_FREQ_HZ, MAX_TARGET_FREQ_HZ);
 }
 
+static int wave_or_default(int wave) {
+    return (wave >= 0 && wave < WAVE_COUNT) ? wave : WAVE_SINE;
+}
+
+static const char *on_off(int flag) {
+    return flag != 0 ? "on" : "off";
+}
+
 void settings_defaults(SynthSettings *s) {
     s->sensitivity_pct = SENS_DEFAULT_PCT;
     s->pitch_min_hz = PITCH_DEFAULT_MIN_HZ;
     s->pitch_max_hz = PITCH_DEFAULT_MAX_HZ;
+    s->wave_default = WAVE_SINE;
+    s->snap_default = 0;
+    s->roll_volume = 1;
 }
 
 /* Minimum is clamped first so that min + PITCH_MIN_SPAN_HZ cannot overflow and
@@ -31,6 +48,28 @@ void settings_sanitize(SynthSettings *s) {
     s->sensitivity_pct = clamp_int(s->sensitivity_pct, SENS_MIN_PCT, SENS_MAX_PCT);
     s->pitch_min_hz = clamp_int(s->pitch_min_hz, PITCH_FLOOR_HZ, PITCH_CEIL_HZ - PITCH_MIN_SPAN_HZ);
     s->pitch_max_hz = clamp_int(s->pitch_max_hz, s->pitch_min_hz + PITCH_MIN_SPAN_HZ, PITCH_CEIL_HZ);
+    s->wave_default = wave_or_default(s->wave_default);
+    s->snap_default = s->snap_default != 0;
+    s->roll_volume = s->roll_volume != 0;
+}
+
+const char *settings_wave_name(int wave) {
+    return WAVE_NAMES[wave_or_default(wave)];
+}
+
+bool synth_snap_active(const SynthSettings *s, bool b_held) {
+    SynthSettings safe = *s;
+
+    settings_sanitize(&safe);
+    return b_held ? safe.snap_default == 0 : safe.snap_default != 0;
+}
+
+int synth_volume_for_roll(const SynthSettings *s, float roll) {
+    SynthSettings safe = *s;
+
+    settings_sanitize(&safe);
+    if (safe.roll_volume == 0) return ROLL_FIXED_VOLUME;
+    return map_roll_to_vol(roll);
 }
 
 /* Half-span is 90 degrees at 100 %: 9000 / sensitivity. Float division keeps
@@ -94,7 +133,7 @@ int map_roll_to_vol(float roll) {
 }
 
 /* Works on a sanitized copy. dir is reduced to its sign, so dir 0 changes
- * nothing and any positive or negative magnitude moves one step. */
+ * nothing and any positive or negative magnitude moves one step. Wave wraps. */
 void settings_field_adjust(SynthSettings *s, SettingsField field, int dir) {
     SynthSettings next = *s;
     int sign = (dir > 0) - (dir < 0);
@@ -109,6 +148,15 @@ void settings_field_adjust(SynthSettings *s, SettingsField field, int dir) {
         break;
     case FIELD_PITCH_MAX:
         next.pitch_max_hz += sign * PITCH_STEP_HZ;
+        break;
+    case FIELD_WAVE:
+        next.wave_default = (next.wave_default + sign + WAVE_COUNT) % WAVE_COUNT;
+        break;
+    case FIELD_SNAP:
+        if (sign != 0) next.snap_default = 1 - next.snap_default;
+        break;
+    case FIELD_ROLL:
+        if (sign != 0) next.roll_volume = 1 - next.roll_volume;
         break;
     case FIELD_RESET:
         if (sign != 0) settings_defaults(&next);
@@ -132,6 +180,18 @@ int settings_field_text(const SynthSettings *s, SettingsField field, char *buf, 
         return snprintf(buf, cap, "Pitch min: %d Hz", shown.pitch_min_hz);
     case FIELD_PITCH_MAX:
         return snprintf(buf, cap, "Pitch max: %d Hz", shown.pitch_max_hz);
+    case FIELD_WAVE:
+        return snprintf(buf, cap, "Wave: %s", settings_wave_name(shown.wave_default));
+    case FIELD_SNAP:
+        return snprintf(buf, cap, "Snap: %s", on_off(shown.snap_default));
+    case FIELD_ROLL:
+        return snprintf(buf, cap, "Roll volume: %s", on_off(shown.roll_volume));
+    case FIELD_SLOT:
+        return snprintf(buf, cap, "Preset slot");
+    case FIELD_SAVE:
+        return snprintf(buf, cap, "Save preset");
+    case FIELD_LOAD:
+        return snprintf(buf, cap, "Load preset");
     case FIELD_RESET:
         return snprintf(buf, cap, "Reset to defaults");
     case FIELD_BACK:

@@ -54,6 +54,7 @@ static const float k_pitch_specials[] = {
 
 static SynthSettings make_settings(int sens, int min_hz, int max_hz) {
     SynthSettings s;
+    settings_defaults(&s);
     s.sensitivity_pct = sens;
     s.pitch_min_hz = min_hz;
     s.pitch_max_hz = max_hz;
@@ -68,10 +69,22 @@ static SynthSettings make_grid_settings(size_t sens_index, size_t range_index) {
 static bool same_settings(const SynthSettings *a, const SynthSettings *b) {
     return a->sensitivity_pct == b->sensitivity_pct &&
            a->pitch_min_hz == b->pitch_min_hz &&
-           a->pitch_max_hz == b->pitch_max_hz;
+           a->pitch_max_hz == b->pitch_max_hz &&
+           a->wave_default == b->wave_default &&
+           a->snap_default == b->snap_default &&
+           a->roll_volume == b->roll_volume;
+}
+
+static bool flags_in_bounds(const SynthSettings *s) {
+    return s->wave_default >= 0 && s->wave_default < WAVE_COUNT &&
+           s->snap_default >= 0 && s->snap_default <= 1 &&
+           s->roll_volume >= 0 && s->roll_volume <= 1;
 }
 
 static bool settings_in_bounds(const SynthSettings *s) {
+    if (!flags_in_bounds(s)) {
+        return false;
+    }
     if (s->sensitivity_pct < SENS_MIN_PCT || s->sensitivity_pct > SENS_MAX_PCT) {
         return false;
     }
@@ -173,6 +186,9 @@ static void test_sanitize_fuzz(void) {
         raw.sensitivity_pct = next_fuzz_int(&rng);
         raw.pitch_min_hz = next_fuzz_int(&rng);
         raw.pitch_max_hz = next_fuzz_int(&rng);
+        raw.wave_default = next_fuzz_int(&rng);
+        raw.snap_default = next_fuzz_int(&rng);
+        raw.roll_volume = next_fuzz_int(&rng);
         once = raw;
         settings_sanitize(&once);
         twice = once;
@@ -261,8 +277,8 @@ static void test_monotonic_in_pitch(void) {
 /* T11: corrupt structs are sanitized inside the mapping, not trusted. */
 static void test_corrupt_struct_stays_in_range(void) {
     const SynthSettings corrupt[] = {
-        {INT_MIN, 2000, -5},
-        {0, 0, 0}
+        {INT_MIN, 2000, -5, 9, 2, -3},
+        {0, 0, 0, 0, 0, 0}
     };
     for (size_t ci = 0; ci < sizeof(corrupt) / sizeof(corrupt[0]); ci++) {
         SynthSettings clean = corrupt[ci];
@@ -470,6 +486,157 @@ static void test_field_text_cap(void) {
     CHECK(bytes_all_equal(area, 2, sizeof area, 0xA5));
 }
 
+/* S1: defaults for the preset fields reproduce the behaviour before presets. */
+static void test_new_field_defaults(void) {
+    SynthSettings s;
+    settings_defaults(&s);
+    CHECK(s.wave_default == WAVE_SINE);
+    CHECK(s.snap_default == 0);
+    CHECK(s.roll_volume == 1);
+}
+
+/* S2: an out-of-range wave resets to sine, nonzero flags become 1; idempotent. */
+static void test_sanitize_preset_fields(void) {
+    SynthSettings s = make_settings(100, 100, 1000);
+    SynthSettings once;
+    s.wave_default = 9;
+    s.snap_default = 2;
+    s.roll_volume = -3;
+    settings_sanitize(&s);
+    CHECK(s.wave_default == WAVE_SINE);
+    CHECK(s.snap_default == 1);
+    CHECK(s.roll_volume == 1);
+    once = s;
+    settings_sanitize(&s);
+    CHECK(same_settings(&s, &once));
+
+    s.wave_default = WAVE_PULSE_NARROW;
+    s.snap_default = 0;
+    s.roll_volume = 0;
+    settings_sanitize(&s);
+    CHECK(s.wave_default == WAVE_PULSE_NARROW);
+    CHECK(s.snap_default == 0);
+    CHECK(s.roll_volume == 0);
+    s.wave_default = -1;
+    settings_sanitize(&s);
+    CHECK(s.wave_default == WAVE_SINE);
+}
+
+/* S3: snap is active when held XOR snap_default. */
+static void test_snap_active_truth_table(void) {
+    SynthSettings s = make_settings(100, 100, 1000);
+    s.snap_default = 0;
+    CHECK(synth_snap_active(&s, false) == false);
+    CHECK(synth_snap_active(&s, true) == true);
+    s.snap_default = 1;
+    CHECK(synth_snap_active(&s, false) == true);
+    CHECK(synth_snap_active(&s, true) == false);
+}
+
+/* S4: roll_volume 0 fixes the volume at 204 for every roll; 1 uses the roll map. */
+static void test_volume_for_roll(void) {
+    const float rolls[] = {NAN, INFINITY, -INFINITY, FLT_MAX, -FLT_MAX, -180.0f, -90.0f, 0.0f, 90.0f, 180.0f};
+    SynthSettings s = make_settings(100, 100, 1000);
+    s.roll_volume = 0;
+    for (size_t i = 0; i < sizeof(rolls) / sizeof(rolls[0]); i++) {
+        CHECK(synth_volume_for_roll(&s, rolls[i]) == 204);
+    }
+    s.roll_volume = 1;
+    CHECK(synth_volume_for_roll(&s, 0.0f) == 255);
+    CHECK(synth_volume_for_roll(&s, 90.0f) == 128);
+    CHECK(synth_volume_for_roll(&s, -90.0f) == 128);
+    CHECK(synth_volume_for_roll(&s, 180.0f) == 0);
+    CHECK(synth_volume_for_roll(&s, NAN) == 0);
+    for (int k = -360; k <= 360; k++) {
+        float roll = (float)k * 0.5f;
+        CHECK(synth_volume_for_roll(&s, roll) == map_roll_to_vol(roll));
+    }
+}
+
+/* Labels for the wave names, in WaveType order. */
+static void test_field_text_preset_labels(void) {
+    const char *names[] = {"sine", "square", "sawtooth", "triangle", "noise", "pulse", "narrow"};
+    char expected[32];
+    SynthSettings s = make_settings(100, 100, 1000);
+    CHECK(field_text_equals(&s, FIELD_SNAP, "Snap: off"));
+    CHECK(field_text_equals(&s, FIELD_ROLL, "Roll volume: on"));
+    CHECK(field_text_equals(&s, FIELD_SLOT, "Preset slot"));
+    CHECK(field_text_equals(&s, FIELD_SAVE, "Save preset"));
+    CHECK(field_text_equals(&s, FIELD_LOAD, "Load preset"));
+    for (int w = 0; w < WAVE_COUNT; w++) {
+        s.wave_default = w;
+        snprintf(expected, sizeof expected, "Wave: %s", names[w]);
+        CHECK(field_text_equals(&s, FIELD_WAVE, expected));
+    }
+    s.snap_default = 1;
+    s.roll_volume = 0;
+    CHECK(field_text_equals(&s, FIELD_SNAP, "Snap: on"));
+    CHECK(field_text_equals(&s, FIELD_ROLL, "Roll volume: off"));
+}
+
+/* Wave cycles with wraparound; snap and roll toggle in either direction; the
+ * action rows never change settings. */
+static void test_field_adjust_preset_fields(void) {
+    SynthSettings s = make_settings(100, 100, 1000);
+    SynthSettings before;
+
+    settings_field_adjust(&s, FIELD_WAVE, 1);
+    CHECK(s.wave_default == WAVE_SQUARE);
+    settings_field_adjust(&s, FIELD_WAVE, -1);
+    CHECK(s.wave_default == WAVE_SINE);
+    settings_field_adjust(&s, FIELD_WAVE, -1);
+    CHECK(s.wave_default == WAVE_PULSE_NARROW);
+    settings_field_adjust(&s, FIELD_WAVE, 1);
+    CHECK(s.wave_default == WAVE_SINE);
+
+    settings_field_adjust(&s, FIELD_SNAP, 1);
+    CHECK(s.snap_default == 1);
+    settings_field_adjust(&s, FIELD_SNAP, -1);
+    CHECK(s.snap_default == 0);
+
+    settings_field_adjust(&s, FIELD_ROLL, -1);
+    CHECK(s.roll_volume == 0);
+    settings_field_adjust(&s, FIELD_ROLL, 1);
+    CHECK(s.roll_volume == 1);
+
+    before = s;
+    settings_field_adjust(&s, FIELD_SLOT, 1);
+    settings_field_adjust(&s, FIELD_SAVE, -1);
+    settings_field_adjust(&s, FIELD_LOAD, 1);
+    settings_field_adjust(&s, FIELD_BACK, -1);
+    CHECK(same_settings(&s, &before));
+}
+
+static void test_field_adjust_reset_preset_fields(void) {
+    SynthSettings s = make_settings(200, 300, 700);
+    SynthSettings defaults;
+    settings_defaults(&defaults);
+    s.wave_default = WAVE_NOISE;
+    s.snap_default = 1;
+    s.roll_volume = 0;
+    settings_field_adjust(&s, FIELD_RESET, 1);
+    CHECK(same_settings(&s, &defaults));
+}
+
+/* Every field, including the new rows, must write at most cap bytes. */
+static void test_field_text_cap_all_fields(void) {
+    SynthSettings s = make_settings(100, 100, 1000);
+    unsigned char area[80];
+    char *buf = (char *)area;
+    for (int f = 0; f < (int)FIELD_COUNT; f++) {
+        int full = settings_field_text(&s, (SettingsField)f, buf, 0);
+        CHECK(full > 2 && full < (int)sizeof area);
+        for (size_t cap = 0; cap <= 2; cap++) {
+            memset(area, 0xA5, sizeof area);
+            CHECK(settings_field_text(&s, (SettingsField)f, buf, cap) == full);
+            CHECK(bytes_all_equal(area, cap, sizeof area, 0xA5));
+            if (cap > 0) {
+                CHECK(area[cap - 1] == '\0');
+            }
+        }
+    }
+}
+
 int main(void) {
     test_defaults();
     test_sanitize_defaults_and_idempotence();
@@ -491,6 +658,14 @@ int main(void) {
     test_field_adjust_reset_and_noop();
     test_field_text_labels();
     test_field_text_cap();
+    test_new_field_defaults();
+    test_sanitize_preset_fields();
+    test_snap_active_truth_table();
+    test_volume_for_roll();
+    test_field_text_preset_labels();
+    test_field_adjust_preset_fields();
+    test_field_adjust_reset_preset_fields();
+    test_field_text_cap_all_fields();
 
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

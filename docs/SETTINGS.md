@@ -67,9 +67,27 @@ point, or the settings module.
 
 ## Persistence
 
-Settings are kept in RAM only and reset when the application restarts.
+Four preset slots are stored on the SD card as `sd:/apps/WiiMotionSynth/preset<1-4>.cfg`
+(plain `key=value` text). In the settings menu choose a slot, then "Save preset"
+or "Load preset". Slot 1 is loaded silently at startup; a missing card or file
+keeps the defaults. The card is mounted on first use, never in the audio
+callback.
+
+Format: `version=1` first, `end=1` last, keys `sensitivity`, `pitch_min`, `pitch_max`,
+`wave`, `snap`, `roll_volume` (see `preset_store.c`). The file is capped at 1024 bytes
+and 80 characters per line. Numbers must be plain integers; out-of-range values
+are clamped, unknown keys are ignored, duplicate or malformed keys make the file
+corrupt and nothing is applied. Errors are shown for about 4 seconds.
+
+Saving writes `preset<n>.cfg.tmp` and renames it over the final file (FAT
+refuses to rename onto an existing file, so the old file is removed first and
+the load falls back to the `.tmp` file if the power fails in between). Deleting
+the app folder deletes the presets.
+
 
 ## Not verified
 
 The host tests prove the arithmetic and bounds. The menu layout, button
-feel, and audible result have not been tested on a Wii.
+feel, and audible result have not been tested on a Wii. SD card reads and
+writes, FAT rename behavior and power-loss recovery are proven only against a
+fake file layer and a host directory, not on a real card.
