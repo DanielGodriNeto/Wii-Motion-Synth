@@ -2,40 +2,28 @@
 
 All notable changes to Wii Motion Synth are documented here.
 
-## [Unreleased]
+## [1.2.0] - 2026-11-05
 
 ### Added
 
-- Four settings presets on the SD card (`sd:/apps/WiiMotionSynth/preset<1-4>.cfg`),
-  with default wave, snap and roll-volume options; slot 1 loads at startup.
-- Settings menu (hold `+`, press `-`) with adjustable motion
-  sensitivity (25-400 %) and pitch range (minimum 100-1000 Hz, maximum up to
-  1050 Hz, at least 50 Hz apart). Defaults reproduce the previous mapping.
-- Host unit tests (`make -C tests`) for the pure logic, now in
-  `synth_core.c`, and a static guard for `audio_callback`.
-
-### Changed
-
-- Pitch beyond the sensitivity window now saturates at the configured
-  maximum or minimum instead of extrapolating (at the default settings: tilt
-  past 90 degrees no longer exceeds 1000 Hz before octave shift and LFO).
-- Non-finite or extreme roll values now give volume 0 instead of an
-  undefined float-to-int conversion.
+- In-app settings for motion sensitivity and pitch range, with bounded values
+  and safe defaults.
+- Four SD-card preset slots for saving and loading settings.
 
 ### Fixed
 
-- Tremolo from the Nunchuk could subtract more than the roll volume and wrap the
-  volume to a huge unsigned value. Volume is now floored at 0.
-- Clamped the synth frequency to 100-2100 Hz after quantization, octave shift,
-  and Nunchuk LFO, so out-of-range or noisy pitch values can no longer produce
-  an invalid phase step. Tilt maps to 100-1000 Hz; octave shift and the LFO can
-  push the output up to the 2100 Hz ceiling. The displayed frequency uses the
-  same clamped value.
-- Non-finite pitch values now map to the 100 Hz floor instead of an undefined
-  float-to-int conversion.
-- White-noise output no longer calls `rand()` once per sample inside the
-  audio callback. It now uses a xorshift32 generator whose state lives in
-  `main.c`. The seed still comes from the clock at startup.
+- Tremolo volume underflow, invalid sensor-derived pitch conversion, and
+  per-sample random-number generation in the audio callback.
+
+### Hardware validation
+
+- The user reports that existing features and the new settings/presets appear
+  to work on Wii hardware.
+- A brief beep before the welcome screen was reported; it stops when the
+  welcome screen appears and has not been diagnosed. See
+  [issue #11](https://github.com/Wiirizon/Wii-Motion-Synth/issues/11).
+
+## [Unreleased]
 
 ## [1.1.1] - 2026-11-01
 

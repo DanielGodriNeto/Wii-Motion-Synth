@@ -87,7 +87,13 @@ the app folder deletes the presets.
 
 ## Not verified
 
-The host tests prove the arithmetic and bounds. The menu layout, button
-feel, and audible result have not been tested on a Wii. SD card reads and
-writes, FAT rename behavior and power-loss recovery are proven only against a
-fake file layer and a host directory, not on a real card.
+The host tests prove the arithmetic and bounds. In a user-reported Wii test,
+the existing features and new settings/presets appeared to work. The exact
+menu feel, exhaustive input combinations, and SD-card behavior across cards
+have not been independently verified. FAT rename behavior and power-loss
+recovery are tested against a fake file layer and host directory, not under
+real hardware power-loss conditions.
+
+The user also reported a brief beep before the welcome screen; it stops when
+the welcome screen appears. Its cause is unknown and is tracked in
+[issue #11](https://github.com/Wiirizon/Wii-Motion-Synth/issues/11).
