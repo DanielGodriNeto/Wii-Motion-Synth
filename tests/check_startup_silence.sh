@@ -2,7 +2,7 @@
 # Static guard for startup silence: ASND_SetVoice starts playback, and the welcome
 # screen only silences the synth later in the main loop. Until then g_vol_scale must
 # never hold a nonzero value, or a beep is audible (issue: beep before welcome screen).
-# Checks the initializer and every assignment before the first ASND_SetVoice call.
+# Checks the initializer and every use of g_vol_scale before the first ASND_SetVoice call.
 # Usage: sh check_startup_silence.sh <path/to/main.c>
 set -u
 
@@ -28,7 +28,11 @@ if ! printf '%s\n' "$code" | grep -qE 'g_vol_scale[[:space:]]*='; then
     exit 1
 fi
 
-bad=$(printf '%s\n' "$code" | grep -E 'g_vol_scale[[:space:]]*=' | grep -vE 'g_vol_scale[[:space:]]*=[[:space:]]*0u?[[:space:]]*;' || true)
+# Every line that mentions g_vol_scale must be exactly a plain 'g_vol_scale = 0;' statement
+# (optionally the declaration): anything else (other values, +=, aliases, two statements
+# on one line) is rejected.
+bad=$(printf '%s
+' "$code" | grep 'g_vol_scale' | grep -vE '^[[:space:]]*(static volatile u32 )?g_vol_scale[[:space:]]*=[[:space:]]*0u?;[[:space:]]*$' || true)
 if [ -n "$bad" ]; then
     echo "check_startup_silence: g_vol_scale is nonzero before the voice starts:" >&2
     printf '%s\n' "$bad" >&2
