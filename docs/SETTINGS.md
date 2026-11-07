@@ -74,7 +74,8 @@ keeps the defaults. The card is mounted on first use, never in the audio
 callback.
 
 Format: `version=1` first, `end=1` last, keys `sensitivity`, `pitch_min`, `pitch_max`,
-`wave`, `snap`, `roll_volume` (see `preset_store.c`). The file is capped at 1024 bytes
+`wave`, `snap`, `roll_volume`, plus the optional `buffer_samples` and `master_volume`
+(see `AUDIO-TUNING.md` and `preset_store.c`). The file is capped at 1024 bytes
 and 80 characters per line. Numbers must be plain integers; out-of-range values
 are clamped, unknown keys are ignored, duplicate or malformed keys make the file
 corrupt and nothing is applied. Errors are shown for about 4 seconds.
