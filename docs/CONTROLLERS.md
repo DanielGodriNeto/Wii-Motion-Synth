@@ -59,9 +59,9 @@ deadzone of 10. The Nunchuk path is unchanged.
 - No hardware test. The mapping and the stick scaling have not been checked on
   a Wii or with a real Classic Controller.
 - `main.c` is not built in this environment (no libogc or devkitPPC). The
-  `WPAD_CLASSIC_BUTTON_*` macros, the `exp.classic.ljs` / `rjs` field names and
-  their `pos`, `center`, `min`, `max` members were not checked against libogc
-  headers.
+  `WPAD_CLASSIC_BUTTON_*` macros and the `exp.classic.ljs` / `rjs` fields
+  (`pos`, `center`, `min`, `max`) were checked by reading the libogc master
+  headers; the libogc version installed with devkitPro may differ.
 - The stick deadzone (10) and the LFO scaling (divisor 60000) were carried over
   from the Nunchuk path and not tuned for the Classic Controller.
 - Host tests cover `classic_input.c` only. The control loop in `main.c` is
