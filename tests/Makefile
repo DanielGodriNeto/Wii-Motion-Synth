@@ -36,6 +36,7 @@ test: $(TEST_BIN) $(PRESET_BIN) $(IO_BIN) $(STDIO_BIN)
 	./$(IO_BIN)
 	./$(STDIO_BIN)
 	sh check_callback.sh ../main.c
+	sh check_startup_silence.sh ../main.c
 
 $(TEST_BIN): $(CORE_SRCS) $(CORE_HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) -I.. -o $@ test_synth_core.c $(CORE_SRCS) $(LDLIBS)

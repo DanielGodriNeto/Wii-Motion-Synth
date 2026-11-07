@@ -26,7 +26,9 @@ static volatile u8 current_buffer = 0;
 static u32 phase_accumulator = 0;
 
 static volatile u32 g_phase_step = 0;
-static volatile u32 g_vol_scale = 204; 
+// Starts silent: ASND_SetVoice begins playback before the welcome screen runs, so a
+// nonzero value here (or before the main loop) is audible as a beep while the SD card mounts.
+static volatile u32 g_vol_scale = 0;
 
 // BEGIN noise-prng
 // White-noise generator for the audio callback: xorshift32 (Marsaglia 13/17/5).
@@ -150,7 +152,7 @@ int main(int argc, char **argv) {
     DCFlushRange(audio_buffers, sizeof(audio_buffers));
 
     g_phase_step = (u32)(((440.0f * SINE_LUT_SIZE) / SAMPLERATE) * 65536.0f);
-    g_vol_scale = (u32)(0.8f * 256.0f);
+    g_vol_scale = 0; // Silent until the main loop derives a volume from the Wiimote
 
     VIDEO_Init();
     GXRModeObj *rmode = VIDEO_GetPreferredMode(NULL);
