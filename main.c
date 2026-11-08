@@ -14,14 +14,14 @@
 #include "preset_io.h"
 #include "preset_fs_stdio.h"
 
-#define SAMPLES_PER_BUFFER 1024
+#define SAMPLES_PER_BUFFER_MAX BUFFER_SAMPLES_MAX
 #define SINE_LUT_MASK (SINE_LUT_SIZE - 1)
 #define PI 3.14159265358979323846f
 
 static volatile WaveType g_current_wave = WAVE_SINE;
 
 static s16 sine_table[SINE_LUT_SIZE] ATTRIBUTE_ALIGN(32);
-static s16 audio_buffers[2][SAMPLES_PER_BUFFER] ATTRIBUTE_ALIGN(32);
+static s16 audio_buffers[2][SAMPLES_PER_BUFFER_MAX] ATTRIBUTE_ALIGN(32);
 static volatile u8 current_buffer = 0;
 static u32 phase_accumulator = 0;
 
@@ -29,6 +29,8 @@ static volatile u32 g_phase_step = 0;
 // Starts silent: ASND_SetVoice begins playback before the welcome screen runs, so a
 // nonzero value here (or before the main loop) is audible as a beep while the SD card mounts.
 static volatile u32 g_vol_scale = 0;
+// Samples per buffer in use. Changed only by apply_audio_buffer, while the voice is stopped.
+static volatile u32 g_buffer_samples = BUFFER_SAMPLES_DEFAULT;
 
 // BEGIN noise-prng
 // White-noise generator for the audio callback: xorshift32 (Marsaglia 13/17/5).
@@ -83,9 +85,10 @@ void audio_callback(int voice) {
     s16 *buf = audio_buffers[current_buffer];
     u32 step = g_phase_step;
     u32 vol = g_vol_scale;
+    u32 samples = g_buffer_samples;
     WaveType wave = g_current_wave;
 
-    for (int i = 0; i < SAMPLES_PER_BUFFER; i++) {
+    for (u32 i = 0; i < samples; i++) {
         u32 lut_index = (phase_accumulator >> 16) & SINE_LUT_MASK;
         s32 sample = 0;
 
@@ -114,8 +117,8 @@ void audio_callback(int voice) {
         phase_accumulator += step;
     }
 
-    DCFlushRange(buf, SAMPLES_PER_BUFFER * sizeof(s16));
-    ASND_AddVoice(voice, buf, SAMPLES_PER_BUFFER * sizeof(s16));
+    DCFlushRange(buf, samples * sizeof(s16));
+    ASND_AddVoice(voice, buf, samples * sizeof(s16));
     current_buffer ^= 1;
 }
 
@@ -140,6 +143,26 @@ static bool g_fat_ok = false;
 static bool sd_mount(void) {
     if (!g_fat_ok) g_fat_ok = fatInitDefault();
     return g_fat_ok;
+}
+
+// Applies the buffer size from g_settings. A change restarts the voice, which
+// causes a short silence, so this runs from the main loop only, never from
+// audio_callback. Called after settings change and when the menu closes.
+static void apply_audio_buffer(void) {
+    SynthSettings safe = g_settings;
+    u32 wanted;
+
+    settings_sanitize(&safe);
+    wanted = (u32)safe.buffer_samples;
+    if (wanted == g_buffer_samples) return;
+
+    ASND_StopVoice(0);
+    g_buffer_samples = wanted;
+    memset(audio_buffers, 0, sizeof(audio_buffers));
+    DCFlushRange(audio_buffers, sizeof(audio_buffers));
+    current_buffer = 0;
+    ASND_SetVoice(0, VOICE_MONO_16BIT, SAMPLERATE, 0, audio_buffers[0], g_buffer_samples * sizeof(s16),
+                  255, 255, audio_callback);
 }
 
 #define STATUS_FRAMES 240 // about 4 seconds at 60 Hz
@@ -207,7 +230,7 @@ int main(int argc, char **argv) {
 
     ASND_Init();
     ASND_Pause(0);
-    ASND_SetVoice(0, VOICE_MONO_16BIT, SAMPLERATE, 0, audio_buffers[0], SAMPLES_PER_BUFFER * sizeof(s16), 255, 255, audio_callback);
+    ASND_SetVoice(0, VOICE_MONO_16BIT, SAMPLERATE, 0, audio_buffers[0], g_buffer_samples * sizeof(s16), 255, 255, audio_callback);
 
     bool show_oscilloscope = true; 
     bool show_welcome = true; // New Welcome Screen State
@@ -227,6 +250,7 @@ int main(int argc, char **argv) {
         SynthSettings loaded;
         if (preset_load(&sd_fs, PRESET_SLOT_MIN, &loaded) == PRESET_OK) g_settings = loaded;
     }
+    apply_audio_buffer();
 
     // Clear the console text before starting
     printf("\x1b[2J"); 
@@ -280,6 +304,7 @@ int main(int argc, char **argv) {
         if ((held & WPAD_BUTTON_PLUS) && (held & WPAD_BUTTON_MINUS) &&
             (pressed & (WPAD_BUTTON_PLUS | WPAD_BUTTON_MINUS))) {
             show_settings = !show_settings;
+            if (!show_settings) apply_audio_buffer();
             pressed &= ~WPAD_BUTTON_MINUS; // Do not also toggle the oscilloscope
             printf("\x1b[2J");
         }
@@ -302,15 +327,22 @@ int main(int argc, char **argv) {
                     } else {
                         SynthSettings loaded;
                         pr = preset_load(&sd_fs, preset_slot, &loaded);
-                        if (pr == PRESET_OK) g_settings = loaded;
+                        if (pr == PRESET_OK) {
+                            g_settings = loaded;
+                            apply_audio_buffer();
+                        }
                     }
                     snprintf(status, sizeof(status), "%s slot %d: %s", (menu_row == FIELD_SAVE) ? "Save" : "Load",
                              preset_slot, preset_strerror(pr));
                     status_frames = STATUS_FRAMES;
                 }
-                if (menu_row == FIELD_RESET) settings_field_adjust(&g_settings, FIELD_RESET, 1);
+                if (menu_row == FIELD_RESET) {
+                    settings_field_adjust(&g_settings, FIELD_RESET, 1);
+                    apply_audio_buffer();
+                }
                 if (menu_row == FIELD_BACK) {
                     show_settings = false;
+                    apply_audio_buffer();
                     printf("\x1b[2J");
                 }
             }
@@ -380,12 +412,13 @@ int main(int argc, char **argv) {
         int target_freq = synth_target_freq(data->orient.pitch, synth_snap_active(&g_settings, (held & WPAD_BUTTON_B) != 0),
                                             (held & WPAD_BUTTON_2) != 0, lfo_offset_hz, &g_settings);
         g_phase_step = freq_to_phase_step(target_freq);
-        g_vol_scale = target_vol;
+        int output_vol = synth_scaled_volume(target_vol, &g_settings);
+        g_vol_scale = output_vol;
 
         // --- RENDER LOGIC ---
         if (show_oscilloscope) {
             // Draw hardware graphics
-            draw_oscilloscope(audio_buffers[current_buffer ^ 1], SAMPLES_PER_BUFFER);
+            draw_oscilloscope(audio_buffers[current_buffer ^ 1], g_buffer_samples);
             GX_DrawDone();
             GX_CopyDisp(frameBuffer, GX_TRUE);
         } else {
@@ -403,7 +436,7 @@ int main(int argc, char **argv) {
             printf("--- WII MOTION SYNTH ---\n\n");
             printf("Current Wave: %-8s\n", wave_name);
             printf("Frequency: %4d Hz     \n", target_freq);
-            printf("Volume: %3d%%          \n", (target_vol * 100) / 255);
+            printf("Volume: %3d%%          \n", (output_vol * 100) / 255);
             printf("Range: %4d-%4d Hz  Sens: %3d%%   \n\n", g_settings.pitch_min_hz, g_settings.pitch_max_hz,
                    g_settings.sensitivity_pct);
             

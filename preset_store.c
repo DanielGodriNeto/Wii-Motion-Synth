@@ -87,6 +87,8 @@ size_t preset_serialize(const SynthSettings *s, char *buf, size_t cap) {
     put_key_int(&w, "sensitivity", safe.sensitivity_pct);
     put_key_int(&w, "pitch_min", safe.pitch_min_hz);
     put_key_int(&w, "pitch_max", safe.pitch_max_hz);
+    put_key_int(&w, "buffer_samples", safe.buffer_samples);
+    put_key_int(&w, "master_volume", safe.master_volume_pct);
     put_key_int(&w, "end", 1);
     return w.len <= cap ? w.len : 0;
 }
@@ -101,6 +103,8 @@ typedef enum {
     KEY_SENS,
     KEY_PMIN,
     KEY_PMAX,
+    KEY_BUF,
+    KEY_MVOL,
     KEY_END,
     KEY_UNKNOWN
 } KeyId;
@@ -118,6 +122,8 @@ static const KeyEntry KEY_TABLE[] = {
     {"sensitivity", KEY_SENS},
     {"pitch_min", KEY_PMIN},
     {"pitch_max", KEY_PMAX},
+    {"buffer_samples", KEY_BUF},
+    {"master_volume", KEY_MVOL},
     {"end", KEY_END}
 };
 
@@ -200,6 +206,12 @@ static bool store_setting(SynthSettings *s, KeyId id, const char *v, size_t n) {
         return true;
     case KEY_PMAX:
         s->pitch_max_hz = x;
+        return true;
+    case KEY_BUF:
+        s->buffer_samples = x;
+        return true;
+    case KEY_MVOL:
+        s->master_volume_pct = x;
         return true;
     default:
         return false;
