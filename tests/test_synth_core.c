@@ -72,7 +72,18 @@ static bool same_settings(const SynthSettings *a, const SynthSettings *b) {
            a->pitch_max_hz == b->pitch_max_hz &&
            a->wave_default == b->wave_default &&
            a->snap_default == b->snap_default &&
-           a->roll_volume == b->roll_volume;
+           a->roll_volume == b->roll_volume &&
+           a->buffer_samples == b->buffer_samples &&
+           a->master_volume_pct == b->master_volume_pct;
+}
+
+static bool buffer_in_bounds(int samples) {
+    return samples == 256 || samples == 512 || samples == 1024 || samples == 2048;
+}
+
+static bool audio_in_bounds(const SynthSettings *s) {
+    return buffer_in_bounds(s->buffer_samples) &&
+           s->master_volume_pct >= MASTER_VOL_MIN_PCT && s->master_volume_pct <= MASTER_VOL_MAX_PCT;
 }
 
 static bool flags_in_bounds(const SynthSettings *s) {
@@ -89,6 +100,9 @@ static bool settings_in_bounds(const SynthSettings *s) {
         return false;
     }
     if (s->pitch_min_hz < PITCH_FLOOR_HZ || s->pitch_min_hz > PITCH_CEIL_HZ - PITCH_MIN_SPAN_HZ) {
+        return false;
+    }
+    if (!audio_in_bounds(s)) {
         return false;
     }
     return s->pitch_max_hz >= s->pitch_min_hz + PITCH_MIN_SPAN_HZ &&
@@ -127,6 +141,8 @@ static void test_defaults(void) {
     CHECK(s.sensitivity_pct == 100);
     CHECK(s.pitch_min_hz == 100);
     CHECK(s.pitch_max_hz == 1000);
+    CHECK(s.buffer_samples == 1024);
+    CHECK(s.master_volume_pct == 100);
 }
 
 /* T2 */
@@ -189,6 +205,8 @@ static void test_sanitize_fuzz(void) {
         raw.wave_default = next_fuzz_int(&rng);
         raw.snap_default = next_fuzz_int(&rng);
         raw.roll_volume = next_fuzz_int(&rng);
+        raw.buffer_samples = next_fuzz_int(&rng);
+        raw.master_volume_pct = next_fuzz_int(&rng);
         once = raw;
         settings_sanitize(&once);
         twice = once;
@@ -277,8 +295,8 @@ static void test_monotonic_in_pitch(void) {
 /* T11: corrupt structs are sanitized inside the mapping, not trusted. */
 static void test_corrupt_struct_stays_in_range(void) {
     const SynthSettings corrupt[] = {
-        {INT_MIN, 2000, -5, 9, 2, -3},
-        {0, 0, 0, 0, 0, 0}
+        {INT_MIN, 2000, -5, 9, 2, -3, 300, INT_MIN},
+        {0, 0, 0, 0, 0, 0, 0, 0}
     };
     for (size_t ci = 0; ci < sizeof(corrupt) / sizeof(corrupt[0]); ci++) {
         SynthSettings clean = corrupt[ci];
@@ -637,7 +655,205 @@ static void test_field_text_cap_all_fields(void) {
     }
 }
 
+static int sanitized_buffer(int value) {
+    SynthSettings s = make_settings(100, 100, 1000);
+    s.buffer_samples = value;
+    settings_sanitize(&s);
+    return s.buffer_samples;
+}
+
+static int sanitized_master(int value) {
+    SynthSettings s = make_settings(100, 100, 1000);
+    s.master_volume_pct = value;
+    settings_sanitize(&s);
+    return s.master_volume_pct;
+}
+
+/* A1: any buffer value snaps to the nearest choice; ties go to the smaller one. */
+static void test_buffer_sanitize_snaps(void) {
+    CHECK(sanitized_buffer(0) == 256);
+    CHECK(sanitized_buffer(255) == 256);
+    CHECK(sanitized_buffer(256) == 256);
+    CHECK(sanitized_buffer(383) == 256);
+    CHECK(sanitized_buffer(384) == 256);
+    CHECK(sanitized_buffer(385) == 512);
+    CHECK(sanitized_buffer(700) == 512);
+    CHECK(sanitized_buffer(768) == 512);
+    CHECK(sanitized_buffer(769) == 1024);
+    CHECK(sanitized_buffer(1500) == 1024);
+    CHECK(sanitized_buffer(1536) == 1024);
+    CHECK(sanitized_buffer(1537) == 2048);
+    CHECK(sanitized_buffer(INT_MAX) == 2048);
+    CHECK(sanitized_buffer(INT_MIN) == 256);
+    CHECK(sanitized_buffer(-1) == 256);
+}
+
+/* A2: master volume clamps to 10..100. */
+static void test_master_sanitize_clamps(void) {
+    CHECK(sanitized_master(INT_MIN) == 10);
+    CHECK(sanitized_master(9) == 10);
+    CHECK(sanitized_master(10) == 10);
+    CHECK(sanitized_master(55) == 55);
+    CHECK(sanitized_master(100) == 100);
+    CHECK(sanitized_master(101) == 100);
+    CHECK(sanitized_master(INT_MAX) == 100);
+}
+
+/* A3: buffer moves one choice per step and stops at both ends; dir 0 is a no-op. */
+static void test_field_adjust_buffer(void) {
+    SynthSettings s = make_settings(100, 100, 1000);
+    s.buffer_samples = 1024;
+    settings_field_adjust(&s, FIELD_BUFFER, 1);
+    CHECK(s.buffer_samples == 2048);
+    settings_field_adjust(&s, FIELD_BUFFER, 1);
+    CHECK(s.buffer_samples == 2048);
+    settings_field_adjust(&s, FIELD_BUFFER, -1);
+    CHECK(s.buffer_samples == 1024);
+    settings_field_adjust(&s, FIELD_BUFFER, -1);
+    CHECK(s.buffer_samples == 512);
+    settings_field_adjust(&s, FIELD_BUFFER, -1);
+    CHECK(s.buffer_samples == 256);
+    settings_field_adjust(&s, FIELD_BUFFER, -1);
+    CHECK(s.buffer_samples == 256);
+    settings_field_adjust(&s, FIELD_BUFFER, 0);
+    CHECK(s.buffer_samples == 256);
+    s.buffer_samples = 300;
+    settings_field_adjust(&s, FIELD_BUFFER, 1);
+    CHECK(s.buffer_samples == 512);
+}
+
+/* A4: master volume moves in 10 % steps, clamped at 10 and 100; dir 0 is a no-op. */
+static void test_field_adjust_master(void) {
+    SynthSettings s = make_settings(100, 100, 1000);
+    s.master_volume_pct = 100;
+    settings_field_adjust(&s, FIELD_MASTER_VOL, 1);
+    CHECK(s.master_volume_pct == 100);
+    settings_field_adjust(&s, FIELD_MASTER_VOL, -1);
+    CHECK(s.master_volume_pct == 90);
+    settings_field_adjust(&s, FIELD_MASTER_VOL, 0);
+    CHECK(s.master_volume_pct == 90);
+    s.master_volume_pct = 55;
+    settings_field_adjust(&s, FIELD_MASTER_VOL, 1);
+    CHECK(s.master_volume_pct == 65);
+    s.master_volume_pct = 15;
+    settings_field_adjust(&s, FIELD_MASTER_VOL, -1);
+    CHECK(s.master_volume_pct == 10);
+    settings_field_adjust(&s, FIELD_MASTER_VOL, -1);
+    CHECK(s.master_volume_pct == 10);
+    s.master_volume_pct = INT_MIN;
+    settings_field_adjust(&s, FIELD_MASTER_VOL, 1);
+    CHECK(s.master_volume_pct == 20);
+}
+
+/* A5: reset restores both new fields. */
+static void test_field_adjust_reset_audio_fields(void) {
+    SynthSettings s = make_settings(200, 300, 700);
+    SynthSettings defaults;
+    settings_defaults(&defaults);
+    s.buffer_samples = 2048;
+    s.master_volume_pct = 40;
+    settings_field_adjust(&s, FIELD_RESET, 1);
+    CHECK(s.buffer_samples == 1024);
+    CHECK(s.master_volume_pct == 100);
+    CHECK(same_settings(&s, &defaults));
+}
+
+static int label_length(const SynthSettings *s, SettingsField field) {
+    char buf[64];
+    return settings_field_text(s, field, buf, sizeof buf);
+}
+
+/* A6: exact labels for the four buffer sizes and the volume; each fits the 40-char limit. */
+static void test_field_text_audio_labels(void) {
+    SynthSettings s = make_settings(100, 100, 1000);
+    s.buffer_samples = 256;
+    CHECK(field_text_equals(&s, FIELD_BUFFER, "Audio buffer: 256 samples (5.3 ms)"));
+    s.buffer_samples = 512;
+    CHECK(field_text_equals(&s, FIELD_BUFFER, "Audio buffer: 512 samples (10.7 ms)"));
+    s.buffer_samples = 1024;
+    CHECK(field_text_equals(&s, FIELD_BUFFER, "Audio buffer: 1024 samples (21.3 ms)"));
+    s.buffer_samples = 2048;
+    CHECK(field_text_equals(&s, FIELD_BUFFER, "Audio buffer: 2048 samples (42.7 ms)"));
+    CHECK(label_length(&s, FIELD_BUFFER) <= 40);
+
+    s.buffer_samples = 300;
+    CHECK(field_text_equals(&s, FIELD_BUFFER, "Audio buffer: 256 samples (5.3 ms)"));
+
+    s.master_volume_pct = 80;
+    CHECK(field_text_equals(&s, FIELD_MASTER_VOL, "Output volume: 80%"));
+    s.master_volume_pct = 500;
+    CHECK(field_text_equals(&s, FIELD_MASTER_VOL, "Output volume: 100%"));
+    CHECK(label_length(&s, FIELD_MASTER_VOL) <= 40);
+}
+
+/* A7: scaled volume: identity at 100 %, exact fractions, clamped inputs, monotonic. */
+static void test_scaled_volume(void) {
+    SynthSettings s = make_settings(100, 100, 1000);
+    int vol;
+    int pct;
+    bool ok = true;
+
+    for (vol = 0; vol <= 255; vol++) {
+        CHECK(synth_scaled_volume(vol, &s) == vol);
+    }
+    s.master_volume_pct = 10;
+    CHECK(synth_scaled_volume(255, &s) == 25);
+    s.master_volume_pct = 50;
+    CHECK(synth_scaled_volume(255, &s) == 127);
+    s.master_volume_pct = 100;
+    CHECK(synth_scaled_volume(-5, &s) == 0);
+    CHECK(synth_scaled_volume(999, &s) == 255);
+    CHECK(synth_scaled_volume(INT_MIN, &s) == 0);
+    CHECK(synth_scaled_volume(INT_MAX, &s) == 255);
+
+    for (pct = MASTER_VOL_MIN_PCT; pct <= MASTER_VOL_MAX_PCT; pct++) {
+        s.master_volume_pct = pct;
+        for (vol = 0; vol < 255; vol++) {
+            if (synth_scaled_volume(vol, &s) > synth_scaled_volume(vol + 1, &s)) {
+                ok = false;
+            }
+        }
+    }
+    for (vol = 0; vol <= 255; vol += 5) {
+        for (pct = MASTER_VOL_MIN_PCT; pct < MASTER_VOL_MAX_PCT; pct++) {
+            SynthSettings lo = s;
+            SynthSettings hi = s;
+            lo.master_volume_pct = pct;
+            hi.master_volume_pct = pct + 1;
+            if (synth_scaled_volume(vol, &lo) > synth_scaled_volume(vol, &hi)) {
+                ok = false;
+            }
+        }
+    }
+    CHECK(ok);
+
+    s.master_volume_pct = INT_MIN;
+    CHECK(synth_scaled_volume(255, &s) == 25);
+    s.master_volume_pct = INT_MAX;
+    CHECK(synth_scaled_volume(255, &s) == 255);
+}
+
+/* A8: latency in tenths of a millisecond, rounded; 0 for empty and clamped above the maximum. */
+static void test_buffer_latency_tenths(void) {
+    CHECK(synth_buffer_latency_tenths_ms(256) == 53);
+    CHECK(synth_buffer_latency_tenths_ms(512) == 107);
+    CHECK(synth_buffer_latency_tenths_ms(1024) == 213);
+    CHECK(synth_buffer_latency_tenths_ms(2048) == 427);
+    CHECK(synth_buffer_latency_tenths_ms(0) == 0);
+    CHECK(synth_buffer_latency_tenths_ms(-1) == 0);
+    CHECK(synth_buffer_latency_tenths_ms(INT_MIN) == 0);
+    CHECK(synth_buffer_latency_tenths_ms(INT_MAX) == 427);
+}
+
 int main(void) {
+    test_buffer_sanitize_snaps();
+    test_master_sanitize_clamps();
+    test_field_adjust_buffer();
+    test_field_adjust_master();
+    test_field_adjust_reset_audio_fields();
+    test_field_text_audio_labels();
+    test_scaled_volume();
+    test_buffer_latency_tenths();
     test_defaults();
     test_sanitize_defaults_and_idempotence();
     test_sensitivity_clamp();

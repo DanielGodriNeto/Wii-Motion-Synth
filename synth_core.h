@@ -33,6 +33,19 @@
 #define PITCH_DEFAULT_MIN_HZ 100
 #define PITCH_DEFAULT_MAX_HZ 1000
 
+/* Audio buffer size in samples per buffer. Only these four choices are valid;
+ * any other value snaps to the nearest one. The default keeps the original
+ * 1024-sample buffer. */
+#define BUFFER_SAMPLES_MIN 256
+#define BUFFER_SAMPLES_MAX 2048
+#define BUFFER_SAMPLES_DEFAULT 1024
+
+/* Output volume in percent of the synth level. 100 is the original level. */
+#define MASTER_VOL_MIN_PCT 10
+#define MASTER_VOL_MAX_PCT 100
+#define MASTER_VOL_DEFAULT 100
+#define MASTER_VOL_STEP_PCT 10
+
 typedef enum {
     WAVE_SINE,
     WAVE_SQUARE,
@@ -53,6 +66,8 @@ typedef struct {
     int wave_default;   /* WaveType, 0..WAVE_COUNT-1 */
     int snap_default;   /* 0 or 1 */
     int roll_volume;    /* 0 or 1; 0 fixes the volume at 204 */
+    int buffer_samples; /* one of BUFFER_SAMPLES_MIN..MAX doubling steps */
+    int master_volume_pct; /* MASTER_VOL_MIN_PCT..MASTER_VOL_MAX_PCT */
 } SynthSettings;
 
 typedef enum {
@@ -62,6 +77,8 @@ typedef enum {
     FIELD_WAVE,
     FIELD_SNAP,
     FIELD_ROLL,
+    FIELD_BUFFER,
+    FIELD_MASTER_VOL,
     FIELD_SLOT,
     FIELD_SAVE,
     FIELD_LOAD,
@@ -99,6 +116,15 @@ int synth_target_freq(float pitch, bool snap, bool octave, int lfo_offset_hz, co
 
 /* Frequency in Hz -> phase accumulator step for the audio callback. */
 uint32_t freq_to_phase_step(int hz);
+
+/* Volume 0..255 scaled by the sanitized master volume percent. vol is clamped
+ * to 0..255 first. 100 % returns vol unchanged. */
+int synth_scaled_volume(int vol, const SynthSettings *s);
+
+/* Latency of one audio buffer in tenths of a millisecond, rounded to the
+ * nearest tenth. Returns 0 for samples <= 0; larger values are clamped to
+ * BUFFER_SAMPLES_MAX. */
+int synth_buffer_latency_tenths_ms(int samples);
 
 /* Moves one menu field by the sign of dir (+1 increase, -1 decrease, 0 no-op).
  * FIELD_RESET restores defaults when dir != 0. FIELD_BACK does nothing. */

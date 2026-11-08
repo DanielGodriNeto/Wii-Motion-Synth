@@ -10,6 +10,7 @@ static const int SCALE_FREQS[] = {
 #define NUM_NOTES (sizeof(SCALE_FREQS) / sizeof(SCALE_FREQS[0]))
 
 #define ROLL_FIXED_VOLUME 204
+#define VOLUME_MAX 255
 
 static const char *const WAVE_NAMES[WAVE_COUNT] = {
     "sine", "square", "sawtooth", "triangle", "noise", "pulse", "narrow"
@@ -33,6 +34,35 @@ static const char *on_off(int flag) {
     return flag != 0 ? "on" : "off";
 }
 
+static const int BUFFER_CHOICES[] = {256, 512, 1024, 2048};
+#define BUFFER_CHOICE_COUNT (sizeof(BUFFER_CHOICES) / sizeof(BUFFER_CHOICES[0]))
+
+/* Index of the choice nearest to samples. Ties keep the earlier, smaller one
+ * because the scan only replaces the best on a strictly smaller distance. */
+static size_t nearest_buffer_index(int samples) {
+    size_t best = 0;
+    for (size_t i = 1; i < BUFFER_CHOICE_COUNT; i++) {
+        int d_best = abs(samples - BUFFER_CHOICES[best]);
+        int d_here = abs(samples - BUFFER_CHOICES[i]);
+        if (d_here < d_best) best = i;
+    }
+    return best;
+}
+
+/* Clamping first keeps the distance computation inside int range. */
+static int snap_buffer_samples(int samples) {
+    int clamped = clamp_int(samples, BUFFER_SAMPLES_MIN, BUFFER_SAMPLES_MAX);
+    return BUFFER_CHOICES[nearest_buffer_index(clamped)];
+}
+
+/* One choice up (sign > 0) or down (sign < 0), stopping at both ends. */
+static int step_buffer_samples(int samples, int sign) {
+    size_t index = nearest_buffer_index(clamp_int(samples, BUFFER_SAMPLES_MIN, BUFFER_SAMPLES_MAX));
+    if (sign > 0 && index + 1 < BUFFER_CHOICE_COUNT) index++;
+    if (sign < 0 && index > 0) index--;
+    return BUFFER_CHOICES[index];
+}
+
 void settings_defaults(SynthSettings *s) {
     s->sensitivity_pct = SENS_DEFAULT_PCT;
     s->pitch_min_hz = PITCH_DEFAULT_MIN_HZ;
@@ -40,6 +70,8 @@ void settings_defaults(SynthSettings *s) {
     s->wave_default = WAVE_SINE;
     s->snap_default = 0;
     s->roll_volume = 1;
+    s->buffer_samples = BUFFER_SAMPLES_DEFAULT;
+    s->master_volume_pct = MASTER_VOL_DEFAULT;
 }
 
 /* Minimum is clamped first so that min + PITCH_MIN_SPAN_HZ cannot overflow and
@@ -51,6 +83,8 @@ void settings_sanitize(SynthSettings *s) {
     s->wave_default = wave_or_default(s->wave_default);
     s->snap_default = s->snap_default != 0;
     s->roll_volume = s->roll_volume != 0;
+    s->buffer_samples = snap_buffer_samples(s->buffer_samples);
+    s->master_volume_pct = clamp_int(s->master_volume_pct, MASTER_VOL_MIN_PCT, MASTER_VOL_MAX_PCT);
 }
 
 const char *settings_wave_name(int wave) {
@@ -119,6 +153,25 @@ uint32_t freq_to_phase_step(int hz) {
     return (uint32_t)(((float)hz * SINE_LUT_SIZE / SAMPLERATE) * 65536.0f);
 }
 
+/* Clamping vol first bounds the product; the sanitized percent is 10..100, so
+ * the result stays in 0..255 and is monotonic in both arguments. */
+int synth_scaled_volume(int vol, const SynthSettings *s) {
+    SynthSettings safe = *s;
+
+    settings_sanitize(&safe);
+    return clamp_int(vol, 0, VOLUME_MAX) * safe.master_volume_pct / 100;
+}
+
+/* Rounded to the nearest tenth: 512 samples is 10.67 ms and shows as 10.7.
+ * Samples are clamped before the multiply so it cannot overflow. */
+int synth_buffer_latency_tenths_ms(int samples) {
+    int clamped;
+
+    if (samples <= 0) return 0;
+    clamped = clamp_int(samples, 1, BUFFER_SAMPLES_MAX);
+    return (clamped * 10000 + SAMPLERATE / 2) / SAMPLERATE;
+}
+
 /* Non-finite roll mutes. Finite roll is clamped to +-1e6 so the integer
  * conversion below cannot overflow. */
 int map_roll_to_vol(float roll) {
@@ -158,6 +211,12 @@ void settings_field_adjust(SynthSettings *s, SettingsField field, int dir) {
     case FIELD_ROLL:
         if (sign != 0) next.roll_volume = 1 - next.roll_volume;
         break;
+    case FIELD_BUFFER:
+        next.buffer_samples = step_buffer_samples(next.buffer_samples, sign);
+        break;
+    case FIELD_MASTER_VOL:
+        next.master_volume_pct += sign * MASTER_VOL_STEP_PCT;
+        break;
     case FIELD_RESET:
         if (sign != 0) settings_defaults(&next);
         break;
@@ -186,6 +245,13 @@ int settings_field_text(const SynthSettings *s, SettingsField field, char *buf, 
         return snprintf(buf, cap, "Snap: %s", on_off(shown.snap_default));
     case FIELD_ROLL:
         return snprintf(buf, cap, "Roll volume: %s", on_off(shown.roll_volume));
+    case FIELD_BUFFER: {
+        int tenths = synth_buffer_latency_tenths_ms(shown.buffer_samples);
+        return snprintf(buf, cap, "Audio buffer: %d samples (%d.%d ms)", shown.buffer_samples,
+                        tenths / 10, tenths % 10);
+    }
+    case FIELD_MASTER_VOL:
+        return snprintf(buf, cap, "Output volume: %d%%", shown.master_volume_pct);
     case FIELD_SLOT:
         return snprintf(buf, cap, "Preset slot");
     case FIELD_SAVE:

@@ -36,6 +36,8 @@ static const char GOLDEN_DEFAULTS[] =
     "sensitivity=100\n"
     "pitch_min=100\n"
     "pitch_max=1000\n"
+    "buffer_samples=1024\n"
+    "master_volume=100\n"
     "end=1\n";
 
 #define GOLDEN_LEN (sizeof GOLDEN_DEFAULTS - 1)
@@ -56,6 +58,8 @@ static void set_sentinel(SynthSettings *s) {
     s->wave_default = 5;
     s->snap_default = 1;
     s->roll_volume = 0;
+    s->buffer_samples = 2048;
+    s->master_volume_pct = 50;
 }
 
 static bool same_settings(const SynthSettings *a, const SynthSettings *b) {
@@ -64,13 +68,22 @@ static bool same_settings(const SynthSettings *a, const SynthSettings *b) {
            a->pitch_max_hz == b->pitch_max_hz &&
            a->wave_default == b->wave_default &&
            a->snap_default == b->snap_default &&
-           a->roll_volume == b->roll_volume;
+           a->roll_volume == b->roll_volume &&
+           a->buffer_samples == b->buffer_samples &&
+           a->master_volume_pct == b->master_volume_pct;
 }
 
 /* Literal expectations, not taken from the implementation. */
 static bool is_golden_defaults(const SynthSettings *s) {
     return s->wave_default == 0 && s->snap_default == 0 && s->roll_volume == 1 &&
-           s->sensitivity_pct == 100 && s->pitch_min_hz == 100 && s->pitch_max_hz == 1000;
+           s->sensitivity_pct == 100 && s->pitch_min_hz == 100 && s->pitch_max_hz == 1000 &&
+           s->buffer_samples == 1024 && s->master_volume_pct == 100;
+}
+
+static bool audio_in_bounds(const SynthSettings *s) {
+    return (s->buffer_samples == 256 || s->buffer_samples == 512 ||
+            s->buffer_samples == 1024 || s->buffer_samples == 2048) &&
+           s->master_volume_pct >= MASTER_VOL_MIN_PCT && s->master_volume_pct <= MASTER_VOL_MAX_PCT;
 }
 
 static bool flags_in_bounds(const SynthSettings *s) {
@@ -88,7 +101,7 @@ static bool pitch_in_bounds(const SynthSettings *s) {
 }
 
 static bool in_bounds(const SynthSettings *s) {
-    return flags_in_bounds(s) && pitch_in_bounds(s);
+    return flags_in_bounds(s) && pitch_in_bounds(s) && audio_in_bounds(s);
 }
 
 static uint32_t xorshift32(uint32_t *state) {
@@ -221,7 +234,8 @@ static void test_p1_serialize_golden(void) {
     s.roll_volume = -3;
     n = preset_serialize(&s, buf, sizeof buf);
     CHECK(memcmp(buf, "version=1\nwave=sine\nsnap=0\nroll_volume=1\nsensitivity=400\n"
-                      "pitch_min=100\npitch_max=1000\nend=1\n", n) == 0);
+                      "pitch_min=100\npitch_max=1000\nbuffer_samples=1024\nmaster_volume=100\n"
+                      "end=1\n", n) == 0);
     CHECK(s.sensitivity_pct == 9999);
 }
 
@@ -243,12 +257,16 @@ static void test_p3_round_trip_grid(void) {
     const int sens[] = {25, 100, 400};
     const int pitch_min[] = {100, 100, 150};
     const int pitch_max[] = {1000, 1050, 1050};
+    const int buffers[] = {256, 512, 1024, 2048};
+    const int master[] = {10, 55, 100};
     char buf[256];
     for (int w = 0; w < WAVE_COUNT; w++) {
     for (int snap = 0; snap <= 1; snap++) {
     for (int roll = 0; roll <= 1; roll++) {
     for (size_t si = 0; si < sizeof sens / sizeof sens[0]; si++) {
     for (size_t pi = 0; pi < sizeof pitch_min / sizeof pitch_min[0]; pi++) {
+    for (size_t bi = 0; bi < sizeof buffers / sizeof buffers[0]; bi++) {
+    for (size_t mi = 0; mi < sizeof master / sizeof master[0]; mi++) {
         SynthSettings in;
         SynthSettings out;
         size_t n;
@@ -258,10 +276,14 @@ static void test_p3_round_trip_grid(void) {
         in.sensitivity_pct = sens[si];
         in.pitch_min_hz = pitch_min[pi];
         in.pitch_max_hz = pitch_max[pi];
+        in.buffer_samples = buffers[bi];
+        in.master_volume_pct = master[mi];
         n = preset_serialize(&in, buf, sizeof buf);
         CHECK(n > 0);
         CHECK(parse_with_sentinel(buf, n, &out) == PRESET_OK);
         CHECK(same_settings(&in, &out));
+    }
+    }
     }
     }
     }
@@ -434,6 +456,78 @@ static void test_p10_wave_names(void) {
     expect_text("version=1\nwave=\n" BODY, PRESET_E_CORRUPT);
 }
 
+/* P10 (audio keys): optional, clamped or snapped, duplicates and non-integers corrupt. */
+static void test_p10_audio_keys(void) {
+    static const char *const BAD[] = {
+        "version=1\nwave=sine\nsnap=0\nroll_volume=1\nbuffer_samples=abc\n" TAIL,
+        "version=1\nwave=sine\nsnap=0\nroll_volume=1\nbuffer_samples=\n" TAIL,
+        "version=1\nwave=sine\nsnap=0\nroll_volume=1\nbuffer_samples=+512\n" TAIL,
+        "version=1\nwave=sine\nsnap=0\nroll_volume=1\nmaster_volume=\n" TAIL,
+        "version=1\nwave=sine\nsnap=0\nroll_volume=1\nmaster_volume=1.5\n" TAIL,
+        "version=1\nwave=sine\nsnap=0\nroll_volume=1\nmaster_volume=5\nmaster_volume=5\n" TAIL,
+        "version=1\n" BODY "buffer_samples=512\n",
+    };
+    SynthSettings out;
+    const char *ok_text = "version=1\nwave=sine\nsnap=0\nroll_volume=1\nbuffer_samples=512\n"
+                          "master_volume=80\nsensitivity=100\npitch_min=100\npitch_max=1000\nend=1\n";
+
+    for (size_t i = 0; i < sizeof BAD / sizeof BAD[0]; i++) {
+        expect_text(BAD[i], PRESET_E_CORRUPT);
+    }
+    CHECK(parse_with_sentinel(ok_text, strlen(ok_text), &out) == PRESET_OK);
+    CHECK(out.buffer_samples == 512);
+    CHECK(out.master_volume_pct == 80);
+
+    expect_text("version=1\nwave=sine\nsnap=0\nroll_volume=1\nbuffer_samples=300\n" TAIL, PRESET_OK);
+    CHECK(parse_with_sentinel("version=1\nwave=sine\nsnap=0\nroll_volume=1\nbuffer_samples=300\n" TAIL,
+                              strlen("version=1\nwave=sine\nsnap=0\nroll_volume=1\nbuffer_samples=300\n" TAIL),
+                              &out) == PRESET_OK);
+    CHECK(out.buffer_samples == 256);
+
+    CHECK(parse_with_sentinel("version=1\nwave=sine\nsnap=0\nroll_volume=1\nmaster_volume=500\n" TAIL,
+                              strlen("version=1\nwave=sine\nsnap=0\nroll_volume=1\nmaster_volume=500\n" TAIL),
+                              &out) == PRESET_OK);
+    CHECK(out.master_volume_pct == 100);
+
+    CHECK(parse_with_sentinel("version=1\nwave=sine\nsnap=0\nroll_volume=1\nmaster_volume=-1\n" TAIL,
+                              strlen("version=1\nwave=sine\nsnap=0\nroll_volume=1\nmaster_volume=-1\n" TAIL),
+                              &out) == PRESET_OK);
+    CHECK(out.master_volume_pct == 10);
+}
+
+/* P13: a file without the audio keys (every legacy v1 file) keeps the defaults. */
+static void test_p13_legacy_file_defaults(void) {
+    SynthSettings out;
+    const char *legacy = "version=1\nwave=square\nsnap=1\nroll_volume=0\nsensitivity=150\n"
+                         "pitch_min=200\npitch_max=900\nend=1\n";
+    CHECK(parse_with_sentinel(legacy, strlen(legacy), &out) == PRESET_OK);
+    CHECK(out.buffer_samples == 1024);
+    CHECK(out.master_volume_pct == 100);
+    CHECK(out.sensitivity_pct == 150);
+}
+
+/* P14: serialize sanitizes a corrupt struct, so the written audio keys are in range. */
+static void test_p14_serialize_corrupt_audio(void) {
+    SynthSettings s;
+    SynthSettings out;
+    char buf[256];
+    size_t n;
+
+    settings_defaults(&s);
+    s.buffer_samples = 300;
+    s.master_volume_pct = INT_MIN;
+    n = preset_serialize(&s, buf, sizeof buf);
+    CHECK(n > 0);
+    CHECK(strstr(buf, "buffer_samples=256\nmaster_volume=10\nend=1\n") != NULL);
+    CHECK(parse_with_sentinel(buf, n, &out) == PRESET_OK);
+    CHECK(out.buffer_samples == 256 && out.master_volume_pct == 10);
+
+    s.buffer_samples = INT_MAX;
+    s.master_volume_pct = INT_MAX;
+    n = preset_serialize(&s, buf, sizeof buf);
+    CHECK(strstr(buf, "buffer_samples=2048\nmaster_volume=100\nend=1\n") != NULL);
+}
+
 /* P11: every error leaves the caller's struct bit-identical. */
 static void test_p11_errors_leave_out_untouched(void) {
     static char big[PRESET_MAX_BYTES + 1];
@@ -445,6 +539,8 @@ static void test_p11_errors_leave_out_untouched(void) {
         "version=1\n" BODY "end=0\n",
         "version=1\n" BODY "snap=1\n",
         "version=1\nwave=sine\nsnap=0\n\x01 roll_volume=1\n" TAIL,
+        "version=1\nwave=sine\nsnap=0\nroll_volume=1\nbuffer_samples=512\nbuffer_samples=512\n" TAIL,
+        "version=1\nwave=sine\nsnap=0\nroll_volume=1\nmaster_volume=abc\n" TAIL,
     };
     memset(big, 'a', sizeof big);
     for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
@@ -541,6 +637,9 @@ int main(void) {
     test_p9_every_cut();
     test_p10_keys_and_values();
     test_p10_wave_names();
+    test_p10_audio_keys();
+    test_p13_legacy_file_defaults();
+    test_p14_serialize_corrupt_audio();
     test_p11_errors_leave_out_untouched();
     test_p12_fuzz();
     test_strerror_messages();
